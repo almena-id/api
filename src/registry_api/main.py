@@ -30,6 +30,10 @@ def create_app() -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url="/openapi.json" if settings.docs_enabled else None,
+        servers=[
+            {"url": settings.public_url, "description": "Public"},
+            {"url": "/", "description": "This server"},
+        ],
     )
     app.add_middleware(
         CORSMiddleware,

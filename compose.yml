@@ -11,7 +11,8 @@ services:
     environment:
       REGISTRY_ENVIRONMENT: ${REGISTRY_ENVIRONMENT:-production}
       REGISTRY_LOG_LEVEL: ${REGISTRY_LOG_LEVEL:-INFO}
-      REGISTRY_CORS_ORIGINS: ${REGISTRY_CORS_ORIGINS:-["http://localhost:3000"]}
+      REGISTRY_PUBLIC_URL: ${REGISTRY_PUBLIC_URL:-https://registry-api.almena.network}
+      REGISTRY_CORS_ORIGINS: ${REGISTRY_CORS_ORIGINS:-["https://registry.almena.network"]}
       # Docker's networks: trust X-Forwarded-* from a reverse proxy on them.
       REGISTRY_FORWARDED_ALLOW_IPS: ${REGISTRY_FORWARDED_ALLOW_IPS:-172.16.0.0/12}
       REGISTRY_DB_HOST: postgres
