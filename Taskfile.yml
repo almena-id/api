@@ -1,0 +1,147 @@
+# https://taskfile.dev
+version: "3"
+
+dotenv: [".env"]
+
+vars:
+  IMAGE: almena-registry-api:dev
+  PORT: '{{.REGISTRY_API_PORT | default "8000"}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  init:
+    desc: Create .env from .env.example with a fresh database password (an existing .env is left untouched)
+    cmds:
+      - cp .env.example .env
+      - sed -i.bak "s/^REGISTRY_DB_PASSWORD=$/REGISTRY_DB_PASSWORD=$(openssl rand -hex 24)/" .env && rm .env.bak
+    status:
+      - test -f .env
+
+  install:
+    desc: Install the dependencies, dev tools included, into .venv
+    cmds:
+      - uv sync --locked
+    sources:
+      - pyproject.toml
+      - uv.lock
+
+  db:
+    desc: Start PostgreSQL in Docker (for task dev), reachable on 127.0.0.1
+    cmds:
+      - docker compose up --detach --wait postgres
+
+  db:migrate:
+    desc: Apply the pending migrations to the database (starts PostgreSQL in Docker)
+    deps: [install, db]
+    cmds:
+      - uv run alembic upgrade head
+
+  db:revision:
+    desc: 'Autogenerate a migration from the models (task db:revision -- "add users")'
+    deps: [install, db]
+    requires:
+      vars: [CLI_ARGS]
+    cmds:
+      - uv run alembic revision --autogenerate -m "{{.CLI_ARGS}}"
+
+  db:downgrade:
+    desc: Revert the last migration
+    deps: [install, db]
+    prompt: Revert the last migration? Its data may be lost.
+    cmds:
+      - uv run alembic downgrade -1
+
+  db:shell:
+    desc: Open psql on the Docker database
+    cmds:
+      - docker compose exec postgres psql --username={{.REGISTRY_DB_USER | default "registry"}} --dbname={{.REGISTRY_DB_NAME | default "registry"}}
+    interactive: true
+
+  dev:
+    desc: Run the API locally with auto-reload against PostgreSQL in Docker
+    deps: [db:migrate]
+    env:
+      REGISTRY_DB_HOST: 127.0.0.1
+      REGISTRY_LOG_LEVEL: '{{.REGISTRY_LOG_LEVEL | default "DEBUG"}}'
+    cmds:
+      - uv run fastapi dev src/registry_api/main.py --port {{.PORT}}
+
+  test:
+    desc: Run the test suite
+    deps: [install]
+    env:
+      REGISTRY_ENVIRONMENT: test
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}
+
+  fmt:
+    desc: Format the code and apply safe lint fixes
+    deps: [install]
+    cmds:
+      - uv run ruff format
+      - uv run ruff check --fix
+
+  lint:
+    desc: Check formatting, lint and types
+    deps: [install]
+    cmds:
+      - uv run ruff format --check
+      - uv run ruff check
+      - uv run mypy
+
+  check:
+    desc: Everything that must pass before finishing a change (lint + test)
+    cmds:
+      - task: lint
+      - task: test
+
+  build:
+    desc: Build the Docker image
+    cmds:
+      - docker compose build
+
+  up:
+    desc: Start the API and PostgreSQL in Docker (detached), migrate, and wait until healthy
+    cmds:
+      - docker compose up --build --detach --wait
+
+  down:
+    desc: Stop and remove the Docker containers
+    cmds:
+      - docker compose down
+
+  down:volume:
+    desc: Stop and remove the Docker containers and their volumes (deletes the database)
+    prompt: Delete the database volume? All its data will be lost.
+    cmds:
+      - docker compose down --volumes --remove-orphans
+
+  logs:
+    desc: Follow the API's container logs
+    cmds:
+      - docker compose logs --follow api
+
+  health:
+    desc: Query the running API's readiness endpoint
+    cmds:
+      - curl --fail --silent --show-error http://localhost:{{.PORT}}/health/ready
+      - echo
+    silent: true
+
+  openapi:
+    desc: Print the running API's OpenAPI document
+    cmds:
+      - curl --fail --silent --show-error http://localhost:{{.PORT}}/openapi.json
+    silent: true
+
+  clean:
+    desc: Remove the virtualenv, caches and the local Docker image
+    cmds:
+      - rm -rf .venv .pytest_cache .mypy_cache .ruff_cache
+      - find . -name __pycache__ -type d -prune -exec rm -rf {} +
+      - docker image rm -f {{.IMAGE}}

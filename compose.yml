@@ -1,0 +1,63 @@
+name: almena-registry-api
+
+services:
+  api:
+    build:
+      context: .
+    image: almena-registry-api:dev
+    restart: unless-stopped
+    ports:
+      - "${REGISTRY_API_PORT:-8000}:8000"
+    environment:
+      REGISTRY_ENVIRONMENT: ${REGISTRY_ENVIRONMENT:-production}
+      REGISTRY_LOG_LEVEL: ${REGISTRY_LOG_LEVEL:-INFO}
+      REGISTRY_CORS_ORIGINS: ${REGISTRY_CORS_ORIGINS:-["http://localhost:3000"]}
+      # Docker's networks: trust X-Forwarded-* from a reverse proxy on them.
+      REGISTRY_FORWARDED_ALLOW_IPS: ${REGISTRY_FORWARDED_ALLOW_IPS:-172.16.0.0/12}
+      REGISTRY_DB_HOST: postgres
+      REGISTRY_DB_PORT: 5432
+      REGISTRY_DB_NAME: ${REGISTRY_DB_NAME:-registry}
+      REGISTRY_DB_USER: ${REGISTRY_DB_USER:-registry}
+      REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env (task init)}
+      REGISTRY_DB_POOL_SIZE: ${REGISTRY_DB_POOL_SIZE:-5}
+      REGISTRY_DB_ECHO: ${REGISTRY_DB_ECHO:-false}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    # Brings the schema up to date, then exits; the API waits for it.
+    image: almena-registry-api:dev
+    pull_policy: never
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      REGISTRY_DB_HOST: postgres
+      REGISTRY_DB_PORT: 5432
+      REGISTRY_DB_NAME: ${REGISTRY_DB_NAME:-registry}
+      REGISTRY_DB_USER: ${REGISTRY_DB_USER:-registry}
+      REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env (task init)}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${REGISTRY_DB_NAME:-registry}
+      POSTGRES_USER: ${REGISTRY_DB_USER:-registry}
+      POSTGRES_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env (task init)}
+    ports:
+      # Local access for `task dev` and `task db:shell`; bound to loopback only.
+      - "127.0.0.1:${REGISTRY_DB_PORT:-5432}:5432"
+    volumes:
+      # Postgres 18 images keep their data under /var/lib/postgresql/<major>.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=\"$$POSTGRES_USER\" --dbname=\"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres-data:
