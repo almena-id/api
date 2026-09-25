@@ -4,7 +4,7 @@ version: "3"
 dotenv: [".env"]
 
 vars:
-  IMAGE: almena-registry-api:dev
+  IMAGE: almena-api:dev
   PORT: '{{.REGISTRY_API_PORT | default "8000"}}'
 
 tasks:

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on `registry-api`.
+Guidance for coding agents working on `api`.
 
 ## Layout
 

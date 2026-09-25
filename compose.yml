@@ -1,17 +1,17 @@
-name: almena-registry-api
+name: almena-api
 
 services:
   api:
     build:
       context: .
-    image: almena-registry-api:dev
+    image: almena-api:dev
     restart: unless-stopped
     ports:
       - "${REGISTRY_API_PORT:-8000}:8000"
     environment:
       REGISTRY_ENVIRONMENT: ${REGISTRY_ENVIRONMENT:-production}
       REGISTRY_LOG_LEVEL: ${REGISTRY_LOG_LEVEL:-INFO}
-      REGISTRY_PUBLIC_URL: ${REGISTRY_PUBLIC_URL:-https://registry-api.almena.network}
+      REGISTRY_PUBLIC_URL: ${REGISTRY_PUBLIC_URL:-https://api.almena.network}
       REGISTRY_CORS_ORIGINS: ${REGISTRY_CORS_ORIGINS:-["https://registry.almena.network"]}
       # Docker's networks: trust X-Forwarded-* from a reverse proxy on them.
       REGISTRY_FORWARDED_ALLOW_IPS: ${REGISTRY_FORWARDED_ALLOW_IPS:-172.16.0.0/12}
@@ -28,7 +28,7 @@ services:
 
   migrate:
     # Brings the schema up to date, then exits; the API waits for it.
-    image: almena-registry-api:dev
+    image: almena-api:dev
     pull_policy: never
     command: ["alembic", "upgrade", "head"]
     environment:

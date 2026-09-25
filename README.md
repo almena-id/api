@@ -1,6 +1,6 @@
-# almena-registry-api
+# almena-api
 
-The backend of the Almena Network registry portal: a [FastAPI](https://fastapi.tiangolo.com) service on PostgreSQL, consumed by [registry-web](../registry-web).
+The backend of the Almena Network registry portal: a [FastAPI](https://fastapi.tiangolo.com) service on PostgreSQL, consumed by [registry](../registry).
 
 Built with Python 3.13, [uv](https://docs.astral.sh/uv/), SQLAlchemy 2 (async, asyncpg), Alembic for migrations and pydantic-settings for configuration.
 
@@ -14,7 +14,7 @@ task up     # PostgreSQL + migrations + API in Docker
 task health # {"status":"ok","version":"0.1.0","database":"ok"}
 ```
 
-The API is published at `https://registry-api.almena.network`, for the portal at `https://registry.almena.network`; locally it answers at `http://localhost:8000`. For development, `task dev` runs it locally with auto-reload against PostgreSQL in Docker, and serves the interactive [Scalar](https://scalar.com) reference at `http://localhost:8000/docs`.
+The API is published at `https://api.almena.network`, for the portal at `https://registry.almena.network`; locally it answers at `http://localhost:8000`. For development, `task dev` runs it locally with auto-reload against PostgreSQL in Docker, and serves the interactive [Scalar](https://scalar.com) reference at `http://localhost:8000/docs`.
 
 ## Configuration
 
@@ -23,7 +23,7 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 | Variable | Default | |
 |---|---|---|
 | `REGISTRY_ENVIRONMENT` | `development` | `production` hides `/docs` and `/openapi.json` (the Docker image's default) |
-| `REGISTRY_PUBLIC_URL` | `https://registry-api.almena.network` | Public origin, advertised as the server in the OpenAPI document |
+| `REGISTRY_PUBLIC_URL` | `https://api.almena.network` | Public origin, advertised as the server in the OpenAPI document |
 | `REGISTRY_CORS_ORIGINS` | `["https://registry.almena.network"]` | Origins allowed by CORS, as a JSON list (`.env.example` adds `http://localhost:3000` for development) |
 | `REGISTRY_DB_HOST` / `REGISTRY_DB_PORT` | `localhost` / `5432` | PostgreSQL server |
 | `REGISTRY_DB_NAME` / `REGISTRY_DB_USER` / `REGISTRY_DB_PASSWORD` | `registry` / `registry` / — | Database and credentials; Compose creates them on the first start |

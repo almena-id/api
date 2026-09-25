@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report vulnerabilities privately through GitHub: on
-[almena-network/registry-api](https://github.com/almena-network/registry-api),
+[almena-network/api](https://github.com/almena-network/api),
 open the **Security** tab and choose **Report a vulnerability**. Do not open a
 public issue, pull request or discussion about it.
 

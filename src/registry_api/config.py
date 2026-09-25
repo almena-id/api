@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     forwarded_allow_ips: str = "127.0.0.1"
 
     # Public origin of this API, advertised as the server in the OpenAPI document.
-    public_url: str = "https://registry-api.almena.network"
-    # Origins allowed by CORS: the registry-web portal.
+    public_url: str = "https://api.almena.network"
+    # Origins allowed by CORS: the registry portal.
     cors_origins: list[str] = Field(default_factory=lambda: ["https://registry.almena.network"])
 
     db_host: str = "localhost"
