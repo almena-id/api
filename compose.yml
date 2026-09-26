@@ -22,6 +22,16 @@ services:
       REGISTRY_DB_PASSWORD: ${REGISTRY_DB_PASSWORD:?set REGISTRY_DB_PASSWORD in .env (task init)}
       REGISTRY_DB_POOL_SIZE: ${REGISTRY_DB_POOL_SIZE:-5}
       REGISTRY_DB_ECHO: ${REGISTRY_DB_ECHO:-false}
+      REGISTRY_SESSION_TTL_HOURS: ${REGISTRY_SESSION_TTL_HOURS:-168}
+      REGISTRY_LOGIN_CODE_TTL_MINUTES: ${REGISTRY_LOGIN_CODE_TTL_MINUTES:-10}
+      REGISTRY_LOGIN_CODE_MAX_ATTEMPTS: ${REGISTRY_LOGIN_CODE_MAX_ATTEMPTS:-5}
+      # Mailpit below unless a real SMTP server is configured.
+      REGISTRY_SMTP_HOST: ${REGISTRY_SMTP_DOCKER_HOST:-mailpit}
+      REGISTRY_SMTP_PORT: ${REGISTRY_SMTP_PORT:-1025}
+      REGISTRY_SMTP_USERNAME: ${REGISTRY_SMTP_USERNAME:-}
+      REGISTRY_SMTP_PASSWORD: ${REGISTRY_SMTP_PASSWORD:-}
+      REGISTRY_SMTP_STARTTLS: ${REGISTRY_SMTP_STARTTLS:-false}
+      REGISTRY_MAIL_FROM: ${REGISTRY_MAIL_FROM:-Almena Registry <no-reply@almena.network>}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -59,6 +69,15 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  mailpit:
+    # Development mail server: catches every email the API sends and shows it
+    # at http://localhost:8025 instead of delivering it.
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REGISTRY_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${REGISTRY_MAILPIT_UI_PORT:-8025}:8025"
 
 volumes:
   postgres-data:

@@ -14,6 +14,8 @@ task up     # PostgreSQL + migrations + API in Docker
 task health # {"status":"ok","version":"0.1.0","database":"ok"}
 ```
 
+There are no passwords: signing up and signing in are the same flow, an email with a six-digit code. In development every email lands in [Mailpit](https://mailpit.axllent.org) at `http://localhost:8025` (`task up` starts it, `task dev` too).
+
 The API is published at `https://api.almena.network`, for the portal at `https://registry.almena.network`; locally it answers at `http://localhost:8000`. For development, `task dev` runs it locally with auto-reload against PostgreSQL in Docker, and serves the interactive [Scalar](https://scalar.com) reference at `http://localhost:8000/docs`.
 
 ## Configuration
@@ -27,6 +29,11 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 | `REGISTRY_CORS_ORIGINS` | `["https://registry.almena.network"]` | Origins allowed by CORS, as a JSON list (`.env.example` adds `http://localhost:3000` for development) |
 | `REGISTRY_DB_HOST` / `REGISTRY_DB_PORT` | `localhost` / `5432` | PostgreSQL server |
 | `REGISTRY_DB_NAME` / `REGISTRY_DB_USER` / `REGISTRY_DB_PASSWORD` | `registry` / `registry` / — | Database and credentials; Compose creates them on the first start |
+| `REGISTRY_SESSION_TTL_HOURS` | `168` | How long a portal sign-in lasts |
+| `REGISTRY_LOGIN_CODE_TTL_MINUTES` / `REGISTRY_LOGIN_CODE_MAX_ATTEMPTS` | `10` / `5` | Emailed sign-in codes: lifetime and wrong guesses allowed |
+| `REGISTRY_SMTP_HOST` / `REGISTRY_SMTP_PORT` | `localhost` / `1025` | SMTP server (Mailpit in development) |
+| `REGISTRY_SMTP_USERNAME` / `REGISTRY_SMTP_PASSWORD` / `REGISTRY_SMTP_STARTTLS` | — / — / `false` | SMTP credentials and STARTTLS, for a real server |
+| `REGISTRY_MAIL_FROM` | `Almena Registry <no-reply@almena.network>` | Sender of the emails |
 | `REGISTRY_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
 
 ## Endpoints
@@ -35,7 +42,10 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 |---|---|
 | `GET /health` | Liveness: the process is up |
 | `GET /health/ready` | Readiness: `503` while the database is unreachable |
-| `/api/v1/…` | The registry API |
+| `POST /api/v1/auth/code` | Email a six-digit sign-in code (`locale`: `en` or `es`); `503 mail_unavailable` |
+| `POST /api/v1/auth/verify` | Exchange the code for a session, creating the account the first time; `401 invalid_code`, `429 too_many_attempts` |
+| `GET /api/v1/auth/me` | The signed-in account (`Authorization: Bearer <token>`) |
+| `POST /api/v1/auth/logout` | End the session behind the bearer token |
 | `GET /docs`, `GET /openapi.json` | API reference ([Scalar](https://scalar.com)) and the OpenAPI document, generated from the code (not in production) |
 
 ## Database migrations

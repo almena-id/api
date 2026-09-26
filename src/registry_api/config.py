@@ -35,6 +35,20 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_echo: bool = False
 
+    # How long a portal sign-in lasts before a new code is needed.
+    session_ttl_hours: int = Field(default=168, gt=0)
+    # Emailed sign-in codes: lifetime and wrong guesses allowed per code.
+    login_code_ttl_minutes: int = Field(default=10, gt=0)
+    login_code_max_attempts: int = Field(default=5, gt=0)
+
+    # Outgoing mail. Development points at Mailpit (localhost:1025, no auth).
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_username: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_starttls: bool = False
+    mail_from: str = "Almena Registry <no-reply@almena.network>"
+
     @property
     def database_url(self) -> str:
         return str(

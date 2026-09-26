@@ -35,6 +35,11 @@ tasks:
     cmds:
       - docker compose up --detach --wait postgres
 
+  mail:
+    desc: Start Mailpit in Docker (for task dev); the inbox is at http://localhost:8025
+    cmds:
+      - docker compose up --detach --wait mailpit
+
   db:migrate:
     desc: Apply the pending migrations to the database (starts PostgreSQL in Docker)
     deps: [install, db]
@@ -63,8 +68,8 @@ tasks:
     interactive: true
 
   dev:
-    desc: Run the API locally with auto-reload against PostgreSQL in Docker
-    deps: [db:migrate]
+    desc: Run the API locally with auto-reload against PostgreSQL and Mailpit in Docker
+    deps: [db:migrate, mail]
     env:
       REGISTRY_DB_HOST: 127.0.0.1
       REGISTRY_LOG_LEVEL: '{{.REGISTRY_LOG_LEVEL | default "DEBUG"}}'

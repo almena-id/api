@@ -10,8 +10,11 @@ src/registry_api/
   main.py            FastAPI app factory: CORS, routers, lifespan, Scalar docs
   config.py          Settings (pydantic-settings, REGISTRY_* variables)
   db.py              async engine, sessionmaker and the `get_session` dependency
+  security.py        sign-in codes and session tokens (both stored as SHA-256)
+  mail.py            SMTP mailer (`get_mailer` dependency) and the email texts, en/es
   api/router.py      /api/v1 router: include new route modules here
-  api/routes/        one module per resource (health.py lives outside /api/v1)
+  api/routes/        one module per resource (health.py lives outside /api/v1);
+                     auth.py holds `current_session`, the dependency for signed-in routes
   models/            SQLAlchemy models; import each one in models/__init__.py
 migrations/          Alembic (env.py reads the settings and models)
 tests/               pytest (async, httpx ASGITransport)
