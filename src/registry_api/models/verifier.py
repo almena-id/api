@@ -5,11 +5,18 @@ import uuid
 from sqlalchemy import ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from registry_api.models.base import Base, TimestampMixin, slug_column
+from registry_api.models.base import (
+    Base,
+    PublishedMixin,
+    SigningMixin,
+    TimestampMixin,
+    slug_column,
+)
 from registry_api.models.identity import Identity
+from registry_api.models.mediator import Mediator
 
 
-class Verifier(TimestampMixin, Base):
+class Verifier(SigningMixin, PublishedMixin, TimestampMixin, Base):
     __tablename__ = "verifiers"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -19,10 +26,17 @@ class Verifier(TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(Text)
-    # The DID it asks for presentations as: one of the tenant's identities, which it may share
-    # with other issuers and verifiers of the same tenant.
+    # The DID it asks for presentations as: an identity of its own, created
+    # with it and named like it (never shared with the tenant or another
+    # issuer or verifier).
     identity_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("identities.id", ondelete="RESTRICT"), index=True
+        Uuid, ForeignKey("identities.id", ondelete="RESTRICT"), index=True, unique=True
+    )
+
+    # The tenant's mediator it receives messages through; none until chosen.
+    mediator_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("mediators.id", ondelete="SET NULL"), index=True
     )
 
     identity: Mapped[Identity] = relationship(lazy="joined")
+    mediator: Mapped[Mediator | None] = relationship(lazy="joined")

@@ -23,9 +23,15 @@ class Settings(BaseSettings):
     forwarded_allow_ips: str = "127.0.0.1"
 
     # Public origin of this API, advertised as the server in the OpenAPI document.
-    public_url: str = "https://api.almena.network"
+    public_url: str = "https://api.almena.id"
+    # Origin of the identity domain: identities' did:web DIDs are made from it
+    # and resolve there; it proxies /ids/ and /.well-known/ to this API.
+    did_url: str = "https://almena.id"
     # Origins allowed by CORS: the registry portal.
-    cors_origins: list[str] = Field(default_factory=lambda: ["https://registry.almena.network"])
+    cors_origins: list[str] = Field(default_factory=lambda: ["https://registry.almena.id"])
+    # Directory holding the origin's `did-configuration.json`, served under
+    # /.well-known/; empty serves none. (Its `did.json` is the root tenant's.)
+    well_known_dir: str = ""
 
     db_host: str = "localhost"
     db_port: int = 5432
@@ -51,7 +57,7 @@ class Settings(BaseSettings):
 
     # Public origin of the portal: providers send the browser back to
     # `{portal_url}/auth/{provider}/callback`, which is what each one registers.
-    portal_url: str = "https://registry.almena.network"
+    portal_url: str = "https://registry.almena.id"
     # Social sign-in. A provider without its client id (and secret or key) is off.
     google_client_id: str = ""
     google_client_secret: SecretStr = SecretStr("")

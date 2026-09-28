@@ -24,6 +24,9 @@ router = APIRouter(prefix="/tenants/{tenant_id}", tags=["members"])
 class MemberOut(BaseModel):
     # `member` has signed in and belongs; `invited` has not signed in yet.
     status: Literal["member", "invited"]
+    # Members only: their account, and what they like to be called.
+    user_id: uuid.UUID | None = None
+    alias: str | None = None
     email: str
     role: Role
     # When they joined, or when they were invited.
@@ -47,7 +50,7 @@ async def admin_of(tenant_id: TenantId, session: CurrentSession, db: DbSession) 
 @router.get("/members", summary="The tenant's members, then those invited and not yet in")
 async def list_members(tenant_id: TenantId, db: DbSession) -> list[MemberOut]:
     members = await db.execute(
-        select(User.email, TenantMember.role, TenantMember.created_at)
+        select(User.id, User.alias, User.email, TenantMember.role, TenantMember.created_at)
         .join(User, User.id == TenantMember.user_id)
         .where(TenantMember.tenant_id == tenant_id)
         .order_by(TenantMember.created_at, User.email)
@@ -58,8 +61,10 @@ async def list_members(tenant_id: TenantId, db: DbSession) -> list[MemberOut]:
         .order_by(TenantInvitation.created_at, TenantInvitation.email)
     )
     return [
-        MemberOut(status="member", email=email, role=role, since=since)
-        for email, role, since in members
+        MemberOut(
+            status="member", user_id=user_id, alias=alias, email=email, role=role, since=since
+        )
+        for user_id, alias, email, role, since in members
     ] + [
         MemberOut(status="invited", email=i.email, role=i.role, since=i.created_at) for i in invited
     ]

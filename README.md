@@ -16,7 +16,17 @@ task health # {"status":"ok","version":"0.1.0","database":"ok"}
 
 There are no passwords: signing up and signing in are the same flow, an email with a six-digit code. In development every email lands in [Mailpit](https://mailpit.axllent.org) at `http://localhost:8025` (`task up` starts it, `task dev` too).
 
-The API is published at `https://api.almena.network`, for the portal at `https://registry.almena.network`; locally it answers at `http://localhost:8000`. For development, `task dev` runs it locally with auto-reload against PostgreSQL in Docker, and serves the interactive [Scalar](https://scalar.com) reference at `http://localhost:8000/docs`.
+The API is published at `https://api.almena.id`, for the portal at `https://registry.almena.id`; locally it answers at `http://localhost:8000`. For development, `task dev` runs it locally with auto-reload against PostgreSQL in Docker, and serves the interactive [Scalar](https://scalar.com) reference at `http://localhost:8000/docs`.
+
+## The root authority
+
+Almena is the root: the tenant the others are certified by. It is an ordinary tenant, created once at install with its first admin, who joins by signing in to the portal with that address:
+
+```bash
+task root -- --admin you@almena.id
+```
+
+(`registry-api init-root --admin <email> [--name Almena] [--mediator-url https://mediator.almena.id]` in a container.) A second run fails. It comes with one issuer, `Almena Certification`, with an identity of its own (`did:web:almena.id:ids:…`): the one that issues the other tenants' certifications; and one mediator, `Almena Mediator`, at `https://mediator.almena.id` (or `--mediator-url`). Both are published at once. Its members are Almena's reviewers, and its identity is the identity domain's own DID, `did:web:almena.id`, served at `/.well-known/did.json`. The server holds no key for it: keys arrive when its members sign from their wallets.
 
 ## Configuration
 
@@ -25,8 +35,10 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 | Variable | Default | |
 |---|---|---|
 | `REGISTRY_ENVIRONMENT` | `development` | `production` hides `/docs` and `/openapi.json` (the Docker image's default) |
-| `REGISTRY_PUBLIC_URL` | `https://api.almena.network` | Public origin, advertised as the server in the OpenAPI document |
-| `REGISTRY_CORS_ORIGINS` | `["https://registry.almena.network"]` | Origins allowed by CORS, as a JSON list (`.env.example` adds `http://localhost:3000` for development) |
+| `REGISTRY_PUBLIC_URL` | `https://api.almena.id` | Public origin, advertised as the server in the OpenAPI document |
+| `REGISTRY_DID_URL` | `https://almena.id` | The identity domain: identities' `did:web` DIDs are made from it and resolve there, so it must proxy `/ids/` and `/.well-known/` to the API |
+| `REGISTRY_CORS_ORIGINS` | `["https://registry.almena.id"]` | Origins allowed by CORS, as a JSON list (add `http://localhost:3000` for the portal's `task dev`) |
+| `REGISTRY_WELL_KNOWN_DIR` | — | Directory with the origin's `did-configuration.json`, served at `/.well-known/` (off while empty; Compose mounts `./well-known`) |
 | `REGISTRY_DB_HOST` / `REGISTRY_DB_PORT` | `localhost` / `5432` | PostgreSQL server |
 | `REGISTRY_DB_NAME` / `REGISTRY_DB_USER` / `REGISTRY_DB_PASSWORD` | `registry` / `registry` / — | Database and credentials; Compose creates them on the first start |
 | `REGISTRY_SESSION_TTL_HOURS` | `168` | How long a portal sign-in lasts |
@@ -34,7 +46,7 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 | `REGISTRY_SMTP_HOST` / `REGISTRY_SMTP_PORT` | `localhost` / `1025` | SMTP server (Mailpit in development) |
 | `REGISTRY_SMTP_USERNAME` / `REGISTRY_SMTP_PASSWORD` / `REGISTRY_SMTP_STARTTLS` | — / — / `false` | SMTP credentials and STARTTLS, for a real server |
 | `REGISTRY_MAIL_FROM` | `Almena Registry <no-reply@almena.network>` | Sender of the emails |
-| `REGISTRY_PORTAL_URL` | `https://registry.almena.network` | The portal; providers send the browser back to `{portal}/auth/{provider}/callback` |
+| `REGISTRY_PORTAL_URL` | `https://registry.almena.id` | The portal; providers send the browser back to `{portal}/auth/{provider}/callback` |
 | `REGISTRY_GOOGLE_CLIENT_ID` / `REGISTRY_GOOGLE_CLIENT_SECRET` | — | Sign in with Google (off while empty) |
 | `REGISTRY_MICROSOFT_CLIENT_ID` / `REGISTRY_MICROSOFT_CLIENT_SECRET` / `REGISTRY_MICROSOFT_TENANT` | — / — / `common` | Sign in with Microsoft (off while empty) |
 | `REGISTRY_GITHUB_CLIENT_ID` / `REGISTRY_GITHUB_CLIENT_SECRET` | — | Sign in with GitHub (off while empty) |
@@ -52,22 +64,47 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 | `GET /api/v1/auth/providers` | Social sign-in providers (`google`, `microsoft`, `apple`, `github`) and which are configured |
 | `POST /api/v1/auth/oauth/{provider}/start` | Begin a social sign-in: the provider URL to send the browser to, and the `state` to keep; `409 provider_disabled` |
 | `POST /api/v1/auth/oauth/{provider}/callback` | Finish it with the `code` and `state` the provider sent back; creates the account the first time; `400 invalid_state`, `403 email_unverified`, `502 provider_error` |
-| `GET /api/v1/auth/me` | The signed-in account (`Authorization: Bearer <token>`) |
+| `GET /api/v1/auth/me` | The signed-in account (`Authorization: Bearer <token>`), with `reviewer`: whether it belongs to the root tenant |
 | `PATCH /api/v1/auth/me` | Change the signed-in account's `alias` (up to 100 characters; blank clears it) |
 | `POST /api/v1/auth/logout` | End the session behind the bearer token |
-| `GET /api/v1/tenants` | The signed-in user's tenants, oldest first, with the user's `role` in each (`name` is `null` until one is given) |
-| `GET /api/v1/tenants/{id}` | A tenant's details: `name`, the user's `role`, its own `identity` (created with it, named like it, renamed with it), and its mediator (`mediator_url`, `mediator_did`), the mailbox of all its issuers and verifiers |
-| `PATCH /api/v1/tenants/{id}` | Change `name` and/or `mediator_url` (admins only; `null` or empty removes the mediator). The mediator is checked: its origin must serve a `did:web` document with a `DIDCommMessaging` service, HTTPS except on loopback; `422` with `name_required`, `mediator_invalid`, `mediator_insecure`, `mediator_unreachable` or `mediator_not_a_mediator` |
-| `GET /api/v1/tenants/{id}/issuers` (and `/verifiers`, `/identities`) | The tenant's items, newest first: `{items, next_cursor, total}`; `limit` (1–100, 20) and `cursor` from the previous page; `404 tenant_not_found` for a tenant the user is not in |
-| `POST /api/v1/tenants/{id}/issuers` (and `/verifiers`) | Register one: `name` (1–200), optional `description`, and the identity it acts as: `identity_id` of one of the tenant's identities, or left out to create one named like it; `422 identity_not_found`. Issuers and verifiers come back with their `identity` |
-| `POST /api/v1/tenants/{id}/identities` | Register an identity: `name` only, until the DID method and key custody are decided. Identities are the tenant's register of DIDs, and come back with `used_by`: the tenant, issuers and verifiers that act as them |
+| `GET /api/v1/tenants` | The signed-in user's tenants, oldest first, with the user's `role` in each and whether Almena has `certified` it (`name` is `null` until one is given) |
+| `GET /api/v1/tenants/{id}` | A tenant's details: `name`, the user's `role`, its own `identity` (created with it, named like it, renamed with it), and the `mediator` its identity receives messages through (one of its mediators, or `null`) |
+| `PATCH /api/v1/tenants/{id}` | Change `name` and/or `mediator_id` (admins only; `null` removes the mediator); `422` with `name_required` or `mediator_not_found` |
+| `GET /api/v1/tenants/{id}/issuers` (and `/verifiers`, `/mediators`, `/identities`) | The tenant's items, newest first: `{items, next_cursor, total}`; `limit` (1–100, 20) and `cursor` from the previous page; `404 tenant_not_found` for a tenant the user is not in |
+| `POST /api/v1/tenants/{id}/issuers` (and `/verifiers`) | Register one: `name` (1–200), optional `description` and optional `mediator_id` (one of the tenant's mediators, `422 mediator_not_found` otherwise). Each gets an identity of its own, named like it, and comes back with it (`identity`) and its `mediator` |
+| `POST /api/v1/tenants/{id}/mediators` | Register a mediator: `name` and the `url` it listens on (`https`; plain `http` only on loopback; `https://` is added when no scheme is typed). Nothing is fetched from it: the registry gives it an identity of its own, whose DID document publishes that address; `422 mediator_invalid` or `mediator_insecure` |
+| `GET /api/v1/tenants/{id}/mediators/{mediator_id}` | One mediator, with its `did`; `404 mediator_not_found` |
+| `PATCH /api/v1/tenants/{id}/mediators/{mediator_id}` | Change its `name` (its identity is renamed with it) and/or `url`; its DID stays; `422` with `name_required`, `mediator_invalid` or `mediator_insecure` |
+| `GET /api/v1/tenants/{id}/issuers/{issuer_id}`, `…/verifiers/{verifier_id}` | One issuer or verifier, with its `did`, its DID `document` and `document_url` (where it resolves once published); `404 issuer_not_found` / `verifier_not_found` |
+| `PATCH /api/v1/tenants/{id}/issuers/{issuer_id}`, `…/verifiers/{verifier_id}` | Change its `name`, `description` and/or `mediator_id` (`null` removes the last two); its DID stays; `422` with `name_required` or `mediator_not_found` |
+| `POST /api/v1/tenants/{id}/{issuers\|verifiers\|mediators}/{item_id}/publish` | Admins only (`403 not_admin`): publish it. Issuers, verifiers and mediators start as drafts: a draft's DID does not resolve, the catalogue does not list it, and no document routes messages through a draft mediator. Certification is not required |
+| `POST /api/v1/tenants/{id}/{issuers\|verifiers\|mediators}/{item_id}/unpublish` | Admins only: back to a draft |
+| `DELETE /api/v1/tenants/{id}/{issuers\|verifiers\|mediators}/{item_id}` | Admins only: delete it and its identity (its DID stops resolving for good); a deleted mediator's users are left without one. `204` |
+| `GET /api/v1/tenants/{id}/{issuers\|verifiers}/{item_id}/signing` | How it signs (people sign from their wallets, never the server): `system` (`single_user`, or `null` while not configured) and `signer` (`id`, `email`, `alias`, and `member`: whether they still belong) |
+| `PUT /api/v1/tenants/{id}/{issuers\|verifiers}/{item_id}/signing` | Admins only: `{"system": "single_user", "user_id": …}` (a member of the tenant) or `{"system": null}`; `422` with `signer_required` or `signer_not_member` |
+| `GET /api/v1/catalog/{issuers\|verifiers\|mediators}` | Public: what is published, newest first, paged by `cursor`: `did`, `name`, `description` or `url`, `published_at`, and the tenant by its `did`, `certified` and approved `legal_name` (never its own name, which starts as "Tenant of {email}") |
+| `GET /api/v1/tenants/{id}/identities/{identity_id}` | One identity: its `did`, `used_by`, and the DID `document` it publishes (at `document_url`); `404 identity_not_found` |
+| `POST /api/v1/tenants/{id}/identities` | Register an identity: `name` only (its DID comes from its slug; keys once custody is decided). Identities are the tenant's register of DIDs, and come back with `used_by`: the tenant, issuers and verifiers that act as them |
 | `GET /api/v1/tenants/{id}/members` | Who belongs (`status: member`) and who is invited but has not signed in yet (`status: invited`), each with `role` (`admin` or `member`) |
 | `POST /api/v1/tenants/{id}/invitations` | Invite by `email` with a `role` (admins only; `locale` for the email): they join the next time they sign in with that address. Inviting again changes the role and resends; `403 not_admin`, `409 already_member`, `503 mail_unavailable` |
+| `GET /api/v1/tenants/{id}/certification` | The tenant's certification by Almena: the one in force (`current`) and the request being worked on (`request`), each with `status` (`draft`, `in_review`, `approved`, `rejected`, `superseded`), `legal_name`, `domain`, the `dns_record` that proves it, `domain_verified`, the `logo` as a `data:` URL and the rejection `reason` |
+| `PUT /api/v1/tenants/{id}/certification/request` | Fill in the request (admins only): `legal_name` and/or `domain` (a bare domain; a new one gets a new DNS token). Without an open request, one is opened from the certification in force, which stays so until the new one is decided; editing a rejected one makes it a draft again; `409 in_review`, `422 legal_name_required` or `domain_invalid` |
+| `PUT /api/v1/tenants/{id}/certification/request/logo` | Upload the logo as the request body (admins only): PNG, JPEG or WebP, up to 256 KB, recognised by its bytes; `422 logo_invalid` or `logo_too_large` |
+| `POST /api/v1/tenants/{id}/certification/request/check-domain` | Look up `_almena.{domain}` for the TXT record `almena-verify={token}` (admins only); `422 domain_required`, `dns_record_not_found` or `dns_unavailable` |
+| `POST /api/v1/tenants/{id}/certification/request/submit` | Send it to Almena's reviewers (admins only); needs the legal name, the domain proved and the logo: `422 request_incomplete` |
+| `GET /api/v1/certifications/{id}/logo` | Public: the logo of a certification in force |
+| `GET /api/v1/review/certifications` | Reviewers only (members of the root tenant, else `403 not_reviewer`): the requests in review, oldest first |
+| `GET /api/v1/review/certifications/{id}` | One request, with the tenant and the certification it holds today |
+| `POST /api/v1/review/certifications/{id}/approve` | Approve it: in force, superseding the tenant's previous one; `409 not_in_review` |
+| `POST /api/v1/review/certifications/{id}/reject` | Reject it with a `reason` (1–1000) the tenant reads; the one in force stays; `409 not_in_review` |
+| `GET /ids/{slug}/did.json` | Public: an identity's DID document, where `did:web:almena.id:ids:{slug}` resolves (through the identity domain's proxy) (`application/did+json`). Its `DIDCommMessaging` service is a mediator's address for a mediator's identity, and the DID of the chosen mediator for the tenant's, an issuer's or a verifier's. An issuer's, verifier's or mediator's names its tenant's DID as `controller`; a certified tenant's has a `LinkedDomains` service with its proved domain. No keys yet |
+| `GET /.well-known/did.json` | Public: the identity domain's own DID document (`did:web:almena.id`, `application/did+json`): the root tenant's identity; `404` until the root exists |
+| `GET /.well-known/did-configuration.json` | Public: the origin's [DID configuration](https://identity.foundation/.well-known/resources/did-configuration/) (Domain Linkage Credentials, signed elsewhere), served as it is from the same directory; `404` without it |
 | `GET /docs`, `GET /openapi.json` | API reference ([Scalar](https://scalar.com)) and the OpenAPI document, generated from the code (not in production) |
 
 ## Social sign-in
 
-Google, Microsoft, Apple and GitHub run the authorization code flow with PKCE and `state` (and a `nonce` for the OpenID Connect ones). Each is off until its variables are set. Register this redirect URI with each provider, with the portal's origin: `https://registry.almena.network/auth/{google|microsoft|apple|github}/callback` (for development, `http://localhost:3000/…`; Apple accepts only HTTPS).
+Google, Microsoft, Apple and GitHub run the authorization code flow with PKCE and `state` (and a `nonce` for the OpenID Connect ones). Each is off until its variables are set. Register this redirect URI with each provider, with the portal's origin: `https://registry.almena.id/auth/{google|microsoft|apple|github}/callback` (for development, `http://localhost:3000/…`; Apple accepts only HTTPS).
 
 An account is its email, however it signs in. A provider's account joins or creates the account for its email only when the provider vouches for the address: Google's and Apple's `email_verified`, GitHub's primary verified email, and for Microsoft a personal account or a work account whose ID token carries the optional claim `xms_edov` (add it in the app registration's *Token configuration*).
 

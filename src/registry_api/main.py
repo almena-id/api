@@ -9,7 +9,7 @@ from scalar_fastapi import add_scalar_reference
 
 from registry_api import __version__
 from registry_api.api.router import api_router
-from registry_api.api.routes import health
+from registry_api.api.routes import did_documents, health, well_known
 from registry_api.config import get_settings
 from registry_api.db import get_engine
 
@@ -45,6 +45,8 @@ def create_app() -> FastAPI:
     if settings.docs_enabled:
         add_scalar_reference(app, route="/docs")
     app.include_router(health.router)
+    app.include_router(did_documents.router)
+    app.include_router(well_known.router)
     app.include_router(api_router)
     return app
 

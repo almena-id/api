@@ -1,6 +1,8 @@
-"""An identity (DID) the tenant holds: the tenant's register of DIDs, which its
-issuers and verifiers point at. Only named for now: the DID method and where
-its keys live are still to be decided, and arrive as columns then."""
+"""An identity (DID) the tenant holds: the tenant's register of DIDs. The
+tenant and each of its issuers and verifiers have one of their own.
+
+Its DID is the `did:web` this API serves for its slug (see `registry_api.dids`);
+where its keys live is still to be decided, and arrives as columns then."""
 
 import uuid
 

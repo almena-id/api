@@ -45,6 +45,7 @@ from registry_api.models import (
     User,
     UserIdentity,
 )
+from registry_api.root import is_reviewer
 from registry_api.security import digest, new_code, new_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -72,6 +73,11 @@ class UserOut(BaseModel):
     email: str
     alias: str | None
     created_at: datetime
+
+
+class Me(UserOut):
+    # A member of the Almena tenant: reviews certification requests.
+    reviewer: bool
 
 
 class AccountIn(BaseModel):
@@ -382,9 +388,10 @@ async def oauth_callback(
     return await _sign_in(db, user)
 
 
-@router.get("/me", summary="The signed-in account")
-async def me(session: CurrentSession) -> UserOut:
-    return _user_out(session.user)
+@router.get("/me", summary="The signed-in account, and whether it reviews for Almena")
+async def me(session: CurrentSession, db: DbSession) -> Me:
+    user = _user_out(session.user)
+    return Me(**user.model_dump(), reviewer=await is_reviewer(db, session.user_id))
 
 
 @router.patch("/me", summary="Change the signed-in account's own details (its alias)")

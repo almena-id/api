@@ -3,7 +3,7 @@
 import uuid
 from typing import Literal
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from registry_api.models.base import Base, TimestampMixin, slug_column
@@ -15,15 +15,22 @@ ROLES: tuple[Role, ...] = ("admin", "member")
 
 class Tenant(TimestampMixin, Base):
     __tablename__ = "tenants"
+    # At most one root.
+    __table_args__ = (
+        Index(
+            "uq_tenants_root",
+            "root",
+            unique=True,
+            postgresql_where=text("root"),
+            sqlite_where=text("root"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     slug: Mapped[str] = slug_column("ten")
     # The tenant an account starts with is named after its email ("Tenant of …");
     # older ones were named so by a migration, in English.
     name: Mapped[str | None] = mapped_column(String(200))
-    # The mediator every issuer and verifier of the tenant uses as its mailbox:
-    # its public origin, and the did:web that origin serves (checked on saving).
-    mediator_url: Mapped[str | None] = mapped_column(String(2048))
     # The organisation's own identity (DID), one of its identities, created with
     # it and named like it. Nullable only because the two rows point at each
     # other: a tenant is always given one as it is created.
@@ -32,7 +39,17 @@ class Tenant(TimestampMixin, Base):
         ForeignKey("identities.id", ondelete="SET NULL", use_alter=True),
         index=True,
     )
-    mediator_did: Mapped[str | None] = mapped_column(String(512))
+    # The root authority: Almena, created once at install (`registry-api
+    # init-root`). Its members review the other tenants' certification requests
+    # and its identity is the identity domain's own DID (`did:web:almena.id`).
+    root: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # One of its mediators, which the tenant's own identity receives messages
+    # through; none until chosen. Its issuers and verifiers each pick their own.
+    mediator_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("mediators.id", ondelete="SET NULL", use_alter=True),
+        index=True,
+    )
 
 
 class TenantMember(TimestampMixin, Base):

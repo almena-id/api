@@ -67,6 +67,16 @@ tasks:
       - docker compose exec postgres psql --username={{.REGISTRY_DB_USER | default "registry"}} --dbname={{.REGISTRY_DB_NAME | default "registry"}}
     interactive: true
 
+  root:
+    desc: 'Create the root tenant (Almena) once, with its first admin (task root -- --admin you@almena.id)'
+    deps: [db:migrate]
+    requires:
+      vars: [CLI_ARGS]
+    env:
+      REGISTRY_DB_HOST: 127.0.0.1
+    cmds:
+      - uv run registry-api init-root {{.CLI_ARGS}}
+
   dev:
     desc: Run the API locally with auto-reload against PostgreSQL and Mailpit in Docker
     deps: [db:migrate, mail]

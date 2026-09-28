@@ -2,18 +2,16 @@
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import Exists, exists, select
 
-from registry_api import mediators
-from registry_api.api.routes.auth import CurrentSession, DbSession, get_http_client
-from registry_api.api.routes.directory import IdentityRef, TenantId
+from registry_api.api.routes.auth import CurrentSession, DbSession
+from registry_api.api.routes.directory import IdentityRef, MediatorRef, TenantId, tenant_mediator
 from registry_api.api.routes.members import admin_of
-from registry_api.models import Identity, Tenant, TenantMember
+from registry_api.models import Certification, Identity, Mediator, Tenant, TenantMember
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
@@ -24,44 +22,53 @@ class TenantOut(BaseModel):
     created_at: datetime
     # The signed-in user's role in it: what the portal offers depends on it.
     role: str
+    # Almena has approved a certification of it, in force now.
+    certified: bool
 
 
 class TenantDetail(TenantOut):
-    # The mailbox of every issuer and verifier in the tenant; `null` until chosen.
-    mediator_url: str | None
-    mediator_did: str | None
-    # The organisation's own identity.
+    # The organisation's own identity, and the mediator it receives messages
+    # through (one of the tenant's; `null` until chosen).
     identity: IdentityRef | None
+    mediator: MediatorRef | None
 
 
 class TenantIn(BaseModel):
-    # Each field is changed only when sent; `mediator_url: null` removes it.
+    # Each field is changed only when sent; `mediator_id: null` removes it.
     name: str | None = Field(default=None, max_length=200)
-    mediator_url: str | None = Field(default=None, max_length=2048)
+    mediator_id: uuid.UUID | None = None
+
+
+def _certified(tenant_id: Any) -> Exists:
+    return exists().where(Certification.tenant_id == tenant_id, Certification.status == "approved")
 
 
 async def _detail(db: DbSession, tenant: Tenant, role: str) -> TenantDetail:
     identity = await db.get(Identity, tenant.identity_id) if tenant.identity_id else None
+    mediator = await db.get(Mediator, tenant.mediator_id) if tenant.mediator_id else None
     return TenantDetail(
         id=tenant.id,
         name=tenant.name,
         created_at=tenant.created_at,
         role=role,
-        mediator_url=tenant.mediator_url,
-        mediator_did=tenant.mediator_did,
+        certified=bool(await db.scalar(select(_certified(tenant.id)))),
         identity=IdentityRef(id=identity.id, name=identity.name) if identity else None,
+        mediator=MediatorRef(id=mediator.id, name=mediator.name) if mediator else None,
     )
 
 
 @router.get("", summary="The signed-in user's tenants, oldest first")
 async def list_tenants(session: CurrentSession, db: DbSession) -> list[TenantOut]:
     rows = await db.execute(
-        select(Tenant, TenantMember.role)
+        select(Tenant, TenantMember.role, _certified(Tenant.id))
         .join(TenantMember, TenantMember.tenant_id == Tenant.id)
         .where(TenantMember.user_id == session.user_id)
         .order_by(Tenant.created_at, Tenant.id)
     )
-    return [TenantOut(id=t.id, name=t.name, created_at=t.created_at, role=role) for t, role in rows]
+    return [
+        TenantOut(id=t.id, name=t.name, created_at=t.created_at, role=role, certified=certified)
+        for t, role, certified in rows
+    ]
 
 
 @router.get("/{tenant_id}", summary="A tenant's details")
@@ -76,8 +83,7 @@ async def get_tenant(tenant_id: TenantId, session: CurrentSession, db: DbSession
     responses={
         status.HTTP_403_FORBIDDEN: {"description": "`not_admin`"},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": "`name_required`, `mediator_invalid`, `mediator_insecure` "
-            "(HTTP off loopback), `mediator_unreachable`, `mediator_not_a_mediator`"
+            "description": "`name_required`, `mediator_not_found` (not one of the tenant's)"
         },
     },
 )
@@ -85,7 +91,6 @@ async def update_tenant(
     tenant_id: Annotated[uuid.UUID, Depends(admin_of)],
     body: TenantIn,
     db: DbSession,
-    http: Annotated[httpx.AsyncClient, Depends(get_http_client)],
 ) -> TenantDetail:
     tenant = await db.get_one(Tenant, tenant_id)
     sent = body.model_fields_set
@@ -99,17 +104,8 @@ async def update_tenant(
             if identity is not None and identity.name == tenant.name:
                 identity.name = name
         tenant.name = name
-    if "mediator_url" in sent:
-        if not (body.mediator_url or "").strip():
-            tenant.mediator_url = tenant.mediator_did = None
-        else:
-            try:
-                url, did = await mediators.resolve(http, body.mediator_url or "")
-            except mediators.MediatorError as error:
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_CONTENT, detail=error.code
-                ) from None
-            tenant.mediator_url, tenant.mediator_did = url, did
+    if "mediator_id" in sent:
+        tenant.mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
     await db.commit()
     await db.refresh(tenant)
     return await _detail(db, tenant, "admin")

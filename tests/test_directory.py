@@ -1,6 +1,10 @@
+import uuid
+from urllib.parse import quote, urlsplit
+
 import pytest
 from httpx import AsyncClient
 
+from registry_api.config import get_settings
 from tests.conftest import Outbox
 
 
@@ -106,53 +110,126 @@ async def test_an_issuer_gets_an_identity_of_its_own(client: AsyncClient, outbox
     assert newest["used_by"] == [{"kind": "issuer", "id": issuer["id"], "name": "Uni"}]
 
 
-async def test_one_identity_can_issue_and_verify(client: AsyncClient, outbox: Outbox) -> None:
+async def test_issuers_and_verifiers_never_share_an_identity(
+    client: AsyncClient, outbox: Outbox
+) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
-    acme = (await client.post(f"{base}/identities", json={"name": "Acme"}, headers=headers)).json()
-    assert acme["used_by"] == []
-    body = {"name": "Acme desk", "identity_id": acme["id"]}
+    own = (await client.get(base, headers=headers)).json()["identity"]["id"]
+    # An identity to act as is not something that can be chosen any more.
+    body = {"name": "Acme desk", "identity_id": own}
     issuer = (await client.post(f"{base}/issuers", json=body, headers=headers)).json()
     verifier = (await client.post(f"{base}/verifiers", json=body, headers=headers)).json()
-    assert issuer["identity"]["id"] == verifier["identity"]["id"] == acme["id"]
+    assert len({own, issuer["identity"]["id"], verifier["identity"]["id"]}) == 3
 
     identities = (await client.get(f"{base}/identities", headers=headers)).json()
-    assert identities["total"] == 2
-    kinds = sorted(u["kind"] for u in identities["items"][0]["used_by"])
-    assert kinds == ["issuer", "verifier"]
-
-    verifiers = (await client.get(f"{base}/verifiers", headers=headers)).json()
-    assert verifiers["items"][0]["identity"] == {"id": acme["id"], "name": "Acme"}
+    assert identities["total"] == 3
 
 
-async def test_another_tenants_identity_is_refused(client: AsyncClient, outbox: Outbox) -> None:
-    ada, ada_tenant = await _sign_in(client, outbox, "ada@example.org")
-    bob, bob_tenant = await _sign_in(client, outbox, "bob@example.org")
-    bobs = await client.post(
-        f"/api/v1/tenants/{bob_tenant}/identities", json={"name": "Bob"}, headers=bob
-    )
-    response = await client.post(
-        f"/api/v1/tenants/{ada_tenant}/issuers",
-        json={"name": "Sneaky", "identity_id": bobs.json()["id"]},
-        headers=ada,
-    )
-    assert response.status_code == 422
-    assert response.json()["detail"] == "identity_not_found"
-
-
-async def test_the_tenant_has_an_identity_of_its_own(client: AsyncClient, outbox: Outbox) -> None:
+async def test_an_identity_shows_its_did_document(client: AsyncClient, outbox: Outbox) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
-    identities = (await client.get(f"{base}/identities", headers=headers)).json()
-    assert identities["total"] == 1
-    own = identities["items"][0]
-    assert own["name"] == "Tenant of ada@example.org"
-    assert own["used_by"] == [{"kind": "tenant", "id": tenant, "name": own["name"]}]
+    issuer = (await client.post(f"{base}/issuers", json={"name": "Uni"}, headers=headers)).json()
 
-    detail = (await client.get(base, headers=headers)).json()
-    assert detail["identity"] == {"id": own["id"], "name": own["name"]}
+    response = await client.get(f"{base}/identities/{issuer['identity']['id']}", headers=headers)
+    assert response.status_code == 200, response.text
+    detail = response.json()
+    assert detail["name"] == "Uni"
+    assert detail["used_by"] == [{"kind": "issuer", "id": issuer["id"], "name": "Uni"}]
+    did = detail["did"]
+    # Made from the identity domain, not the API's origin.
+    host = urlsplit(get_settings().did_url).netloc
+    assert did.startswith(f"did:web:{quote(host, safe='')}:ids:idn_")
+    # Its tenant controls it; no mediator yet: nothing to route messages through.
+    own = (await client.get(base, headers=headers)).json()["identity"]["id"]
+    tenant_did = (await client.get(f"{base}/identities/{own}", headers=headers)).json()["did"]
+    assert detail["document"] == {
+        "@context": ["https://www.w3.org/ns/did/v1"],
+        "id": did,
+        "controller": tenant_did,
+    }
 
-    # Renaming the tenant renames its identity with it.
-    await client.patch(base, json={"name": "Acme"}, headers=headers)
-    renamed = (await client.get(f"{base}/identities", headers=headers)).json()["items"][0]
-    assert renamed["name"] == "Acme"
+    # The same document, public once published, where did:web resolves it.
+    await client.post(f"{base}/issuers/{issuer['id']}/publish", headers=headers)
+    slug = did.rsplit(":", 1)[1]
+    assert detail["document_url"] == f"{get_settings().did_url}/ids/{slug}/did.json"
+    published = await client.get(f"/ids/{slug}/did.json")
+    assert published.status_code == 200
+    assert published.headers["content-type"] == "application/did+json"
+    assert published.json() == detail["document"]
+
+
+async def test_the_did_document_names_the_mediator(client: AsyncClient, outbox: Outbox) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@example.org")
+    base = f"/api/v1/tenants/{tenant}"
+    body = {"name": "Relay", "url": "https://mediator.example.org"}
+    mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
+    await client.patch(base, json={"mediator_id": mediator["id"]}, headers=headers)
+    # Nothing routes through a draft mediator.
+    await client.post(f"{base}/mediators/{mediator['id']}/publish", headers=headers)
+    mediator_did = (await client.get(f"{base}/mediators/{mediator['id']}", headers=headers)).json()[
+        "did"
+    ]
+    identity_id = (await client.get(base, headers=headers)).json()["identity"]["id"]
+
+    detail = (await client.get(f"{base}/identities/{identity_id}", headers=headers)).json()
+    assert detail["used_by"][0]["kind"] == "tenant"
+    assert detail["document"]["service"] == [
+        {
+            "id": f"{detail['did']}#didcomm",
+            "type": "DIDCommMessaging",
+            "serviceEndpoint": {"uri": mediator_did, "accept": ["didcomm/v2"]},
+        }
+    ]
+
+
+async def test_identities_stay_in_their_tenant(client: AsyncClient, outbox: Outbox) -> None:
+    ada, ada_tenant = await _sign_in(client, outbox, "ada@example.org")
+    bob, bob_tenant = await _sign_in(client, outbox, "bob@example.org")
+    own = (await client.get(f"/api/v1/tenants/{ada_tenant}", headers=ada)).json()["identity"]["id"]
+
+    for path in (f"{bob_tenant}/identities/{own}", f"{ada_tenant}/identities/{own}"):
+        response = await client.get(f"/api/v1/tenants/{path}", headers=bob)
+        assert response.status_code == 404
+    assert (await client.get("/ids/idn_nothere/did.json")).status_code == 404
+
+
+@pytest.mark.parametrize("kind", ["issuers", "verifiers"])
+async def test_one_opens_and_changes(client: AsyncClient, outbox: Outbox, kind: str) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@example.org")
+    base = f"/api/v1/tenants/{tenant}"
+    body = {"name": "Relay", "url": "https://mediator.example.org"}
+    mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
+    created = (await client.post(f"{base}/{kind}", json={"name": "Uni"}, headers=headers)).json()
+    url = f"{base}/{kind}/{created['id']}"
+
+    detail = (await client.get(url, headers=headers)).json()
+    assert detail["name"] == "Uni" and detail["mediator"] is None
+    assert detail["did"].split(":")[-2:][0] == "ids"
+
+    patch = {"name": " Uni 2 ", "description": "Degrees", "mediator_id": mediator["id"]}
+    changed = await client.patch(url, json=patch, headers=headers)
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["name"] == "Uni 2"
+    assert changed.json()["description"] == "Degrees"
+    assert changed.json()["mediator"] == {"id": mediator["id"], "name": "Relay"}
+    # Its DID stays; its identity follows the name.
+    assert changed.json()["did"] == detail["did"]
+    assert changed.json()["identity"]["name"] == "Uni 2"
+
+    # Only what is sent changes; null removes.
+    cleared = (
+        await client.patch(url, json={"description": None, "mediator_id": None}, headers=headers)
+    ).json()
+    assert cleared["name"] == "Uni 2"
+    assert cleared["description"] is None and cleared["mediator"] is None
+
+    blank = await client.patch(url, json={"name": "  "}, headers=headers)
+    assert blank.status_code == 422 and blank.json()["detail"] == "name_required"
+    other = await client.patch(url, json={"mediator_id": str(uuid.uuid4())}, headers=headers)
+    assert other.status_code == 422 and other.json()["detail"] == "mediator_not_found"
+
+    bob, _ = await _sign_in(client, outbox, "bob@example.org")
+    assert (await client.get(url, headers=bob)).status_code == 404
+    missing = await client.get(f"{base}/{kind}/{uuid.uuid4()}", headers=headers)
+    assert missing.status_code == 404

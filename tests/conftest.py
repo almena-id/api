@@ -37,7 +37,7 @@ def outbox() -> Outbox:
 
 
 @pytest.fixture(autouse=True)
-async def database() -> AsyncIterator[None]:
+async def database() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """A fresh in-memory database per test (create_all is for tests only)."""
     engine = create_async_engine(
         "sqlite+aiosqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -51,8 +51,15 @@ async def database() -> AsyncIterator[None]:
             yield session
 
     app.dependency_overrides[get_session] = override
-    yield
+    yield sessionmaker
     await engine.dispose()
+
+
+@pytest.fixture
+async def db(database: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncSession]:
+    """A session on the test's database, for what no endpoint does."""
+    async with database() as session:
+        yield session
 
 
 @pytest.fixture
