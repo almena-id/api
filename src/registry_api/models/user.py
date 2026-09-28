@@ -15,3 +15,5 @@ class User(TimestampMixin, Base):
     # Stored lowercased, so uniqueness does not depend on how it was typed.
     # There is no password: owning the mailbox is what signs somebody in.
     email: Mapped[str] = mapped_column(String(320), unique=True)
+    # What the person likes to be called; the email stands in while there is none.
+    alias: Mapped[str | None] = mapped_column(String(100))

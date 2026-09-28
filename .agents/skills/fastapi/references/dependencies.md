@@ -55,7 +55,9 @@ def get_username():
     finally:
         print("Clean up before response is sent")
 
+
 UserNameDep = Annotated[str, Depends(get_username, scope="function")]
+
 
 @app.get("/users/me")
 def get_user_me(username: UserNameDep):
@@ -95,9 +97,7 @@ class DatabasePaginator:
         }
 
 
-def get_db_paginator(
-    offset: int = 0, limit: int = 100, q: str | None = None
-) -> DatabasePaginator:
+def get_db_paginator(offset: int = 0, limit: int = 100, q: str | None = None) -> DatabasePaginator:
     return DatabasePaginator(offset=offset, limit=limit, q=q)
 
 

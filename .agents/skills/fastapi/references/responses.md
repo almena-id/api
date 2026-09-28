@@ -72,8 +72,6 @@ class Item(BaseModel):
 
 @app.get("/items/me", response_model=Item)
 async def get_item() -> Any:
-    item = InternalItem(
-        name="Foo", description="A very nice Item", secret_key="supersecret"
-    )
+    item = InternalItem(name="Foo", description="A very nice Item", secret_key="supersecret")
     return item
 ```

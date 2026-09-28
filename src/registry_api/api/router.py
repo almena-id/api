@@ -2,7 +2,10 @@
 
 from fastapi import APIRouter
 
-from registry_api.api.routes import auth
+from registry_api.api.routes import auth, directory, members, tenants
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+api_router.include_router(tenants.router)
+api_router.include_router(directory.router)
+api_router.include_router(members.router)

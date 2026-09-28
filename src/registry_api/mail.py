@@ -24,6 +24,27 @@ _CODE_MAIL: dict[Locale, tuple[str, str]] = {
 }
 
 
+_INVITATION_MAIL: dict[Locale, tuple[str, str]] = {
+    "en": (
+        "You have been invited to {tenant} on Almena Registry",
+        "{inviter} has invited you to {tenant} on Almena Registry, as {role}.\n\n"
+        "Sign in with this email address to join:\n\n    {url}\n",
+    ),
+    "es": (
+        "Te han invitado a {tenant} en Almena Registry",
+        "{inviter} te ha invitado a {tenant} en Almena Registry, como {role}.\n\n"
+        "Inicia sesión con esta dirección de correo para unirte:\n\n    {url}\n",
+    ),
+}
+
+_ROLE_NAMES: dict[Locale, dict[str, str]] = {
+    "en": {"admin": "admin", "member": "member"},
+    "es": {"admin": "administrador", "member": "miembro"},
+}
+
+_UNNAMED_TENANT: dict[Locale, str] = {"en": "a tenant", "es": "un tenant"}
+
+
 class Mailer:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -44,6 +65,24 @@ class Mailer:
         message["Subject"] = subject
         message.set_content(body)
         await run_in_threadpool(self._send, message)
+
+    async def send_invitation(
+        self,
+        to: str,
+        *,
+        tenant: str | None,
+        inviter: str,
+        role: str,
+        locale: Locale,
+    ) -> None:
+        subject, body = _INVITATION_MAIL[locale]
+        values = {
+            "tenant": tenant or _UNNAMED_TENANT[locale],
+            "inviter": inviter,
+            "role": _ROLE_NAMES[locale].get(role, role),
+            "url": f"{self.settings.portal_url.rstrip('/')}/login",
+        }
+        await self.send(to, subject.format(**values), body.format(**values))
 
     async def send_code(self, to: str, code: str, locale: Locale) -> None:
         subject, body = _CODE_MAIL[locale]

@@ -49,6 +49,24 @@ class Settings(BaseSettings):
     smtp_starttls: bool = False
     mail_from: str = "Almena Registry <no-reply@almena.network>"
 
+    # Public origin of the portal: providers send the browser back to
+    # `{portal_url}/auth/{provider}/callback`, which is what each one registers.
+    portal_url: str = "https://registry.almena.network"
+    # Social sign-in. A provider without its client id (and secret or key) is off.
+    google_client_id: str = ""
+    google_client_secret: SecretStr = SecretStr("")
+    microsoft_client_id: str = ""
+    microsoft_client_secret: SecretStr = SecretStr("")
+    # `common` takes work, school and personal accounts; a tenant id narrows it.
+    microsoft_tenant: str = "common"
+    github_client_id: str = ""
+    github_client_secret: SecretStr = SecretStr("")
+    # Apple: the Services ID, the team, and the Sign in with Apple key (.p8, PEM).
+    apple_client_id: str = ""
+    apple_team_id: str = ""
+    apple_key_id: str = ""
+    apple_private_key: SecretStr = SecretStr("")
+
     @property
     def database_url(self) -> str:
         return str(
