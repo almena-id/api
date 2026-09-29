@@ -40,8 +40,7 @@ class Tenant(TimestampMixin, Base):
         index=True,
     )
     # The root authority: Almena, created once at install (`registry-api
-    # init-root`). Its members review the other tenants' certification requests
-    # and its identity is the identity domain's own DID (`did:web:almena.id`).
+    # init-root`). Its identity is the identity domain's own DID.
     root: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # One of its mediators, which the tenant's own identity receives messages
     # through; none until chosen. Its issuers and verifiers each pick their own.

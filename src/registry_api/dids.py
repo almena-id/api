@@ -1,61 +1,88 @@
-"""The DIDs of the tenant's identities: `did:web` under the identity domain.
+"""The DIDs of the tenants' identities: `did:webvh` under the identity domain.
 
-An identity with slug ``idn_…`` is ``did:web:{host}:ids:idn_…``, and its
-document is served at ``{did_url}/ids/idn_…/did.json``. The identity domain
-(almena.id) is kept apart from the API's origin because a did:web cannot move:
-it proxies ``/ids/`` and ``/.well-known/`` to this API.
+An identity with slug ``idn_…`` is ``did:webvh:{SCID}:{host}:ids:idn_…``; its
+log is served at ``{did_url}/ids/idn_…/did.jsonl`` and, for resolvers that
+know only did:web, its current document at ``…/did.json`` as
+``did:web:{host}:ids:idn_…``. The identity domain (almena.id) is kept apart
+from the API's origin because the DID names it: it proxies ``/ids/`` and
+``/.well-known/`` to this API. The root tenant's identity is the domain's own:
+``did:webvh:{SCID}:{host}``, at ``{did_url}/.well-known/did.jsonl``.
 
-The root tenant's identity is the exception: it is the identity domain's own
-DID, ``did:web:{host}``, served at ``{did_url}/.well-known/did.json``.
+**The registry never signs.** It works out the document an identity should
+publish (`desired`) and the update keys that may sign it — the tenant's admins'
+wallets — and prepares the log entry that would take the log there; a tenant
+admin signs it from a wallet, and only then is it published. Until its first
+entry is signed an identity is *pending* and has no DID; when what it should
+publish differs from what it last signed it is *outdated*.
 
 Its DIDComm service depends on what acts as it: a mediator's names the address
 the mediator listens on; the tenant's, an issuer's or a verifier's names the
-DID of the mediator it picked, so messages to it are routed there.
+DID of the mediator it picked, so messages to it are routed there. An
+issuer's, a verifier's or a mediator's document names its tenant's DID as its
+`controller`. A tenant names the domains it has proved by DNS, those linked to
+it, as a `LinkedDomains` service.
 
-An issuer's, a verifier's or a mediator's document names its tenant's DID as
-its `controller`: the chain root → tenant → components, written in the
-documents. A tenant with a certification in force names its domain, proved by
-DNS, as a `LinkedDomains` service. Verification methods arrive when members
-sign from their wallets.
+**Keys.** What an identity signs is checked against the keys its document
+lists under `assertionMethod`, each one embedded as a `Multikey` verification
+method (`{did}#{multikey}`) so a verifier needs to resolve nothing else: for a
+tenant's own identity, its admins' linked wallets (under `authentication` too,
+for the presentation that is its `whois.vp`; an issuer's, verifier's or
+mediator's `authentication` names those same keys as methods of the tenant's
+DID, its controller, which presents the tenant's endorsement of it) (the same keys that update
+its log); for an
+issuer or a verifier, the wallets of the member its signing system names; a
+mediator signs nothing. Every key is a person's registry `did:key`: the
+registry holds none.
 
 An issuer, verifier or mediator that is still a draft (unpublished) has no
 public document, and no document routes messages through a draft mediator.
 """
 
+import json
 import uuid
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, Literal
 from urllib.parse import quote, urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api.models import Certification, Identity, Issuer, Mediator, Tenant, Verifier
+from registry_api import webvh
+from registry_api.models import (
+    DidLogEntry,
+    Identity,
+    Issuer,
+    Mediator,
+    Tenant,
+    TenantDomain,
+    TenantMember,
+    UserIdentity,
+    Verifier,
+)
 
 # The path segment identities live under, in the DID and in the URL.
 PATH = "ids"
 
+Status = Literal["pending", "signed", "outdated"]
 
-def domain_did(did_url: str) -> str:
-    """The identity domain's own DID: the root tenant's."""
+
+def _host_and_path(did_url: str) -> tuple[str, list[str]]:
     parts = urlsplit(did_url)
-    # did:web writes the port percent-encoded: `localhost%3A8000`.
+    # The DID writes the port percent-encoded: `localhost%3A8000`.
     host = quote(parts.netloc, safe="")
-    path = [quote(p, safe="") for p in parts.path.split("/") if p]
-    return ":".join(["did:web", host, *path])
+    return host, [quote(p, safe="") for p in parts.path.split("/") if p]
 
 
-def did_for(did_url: str, slug: str) -> str:
-    return ":".join([domain_did(did_url), PATH, slug])
+def template_for(did_url: str, slug: str, root: bool) -> str:
+    """The identity's DID with `{SCID}` still in place of the SCID."""
+    host, path = _host_and_path(did_url)
+    return webvh.did_prefix(host, path if root else [*path, PATH, slug])
 
 
-def url_for(did_url: str, slug: str) -> str:
-    """Where `did_for(did_url, slug)` resolves."""
-    return f"{did_url.rstrip('/')}/{PATH}/{slug}/did.json"
-
-
-def domain_url(did_url: str) -> str:
-    """Where `domain_did(did_url)` resolves."""
-    return f"{did_url.rstrip('/')}/.well-known/did.json"
+def base_url(did_url: str, slug: str, root: bool) -> str:
+    """Where the identity's `did.jsonl` and `did.json` are served."""
+    base = did_url.rstrip("/")
+    return f"{base}/.well-known" if root else f"{base}/{PATH}/{slug}"
 
 
 async def is_root_identity(db: AsyncSession, identity_id: uuid.UUID) -> bool:
@@ -64,6 +91,8 @@ async def is_root_identity(db: AsyncSession, identity_id: uuid.UUID) -> bool:
 
 
 DID_CONTEXT = "https://www.w3.org/ns/did/v1"
+# Multikey verification methods.
+MULTIKEY_CONTEXT = "https://w3id.org/security/multikey/v1"
 # DIF Well Known DID Configuration, which defines the LinkedDomains service.
 LINKED_DOMAINS_CONTEXT = "https://identity.foundation/.well-known/did-configuration/v1"
 
@@ -72,15 +101,41 @@ def document(
     did: str,
     endpoint: str | None,
     controller: str | None = None,
-    domain: str | None = None,
+    domains: list[str] | None = None,
+    keys: list[str] | None = None,
+    authenticate: bool = False,
+    controller_keys: list[str] | None = None,
 ) -> dict[str, Any]:
     """The DID document an identity publishes: `endpoint` is where its DIDComm
     messages go (an address, or a mediator's DID), `controller` the DID of the
-    tenant it belongs to, `domain` the tenant's certified domain; each if any."""
-    context = [DID_CONTEXT, LINKED_DOMAINS_CONTEXT] if domain else [DID_CONTEXT]
+    tenant it belongs to, `domains` the tenant's proved domains, `keys` the
+    multikeys that sign for it; each if any."""
+    context = [DID_CONTEXT]
+    if keys:
+        context.append(MULTIKEY_CONTEXT)
+    if domains:
+        context.append(LINKED_DOMAINS_CONTEXT)
     doc: dict[str, Any] = {"@context": context, "id": did}
     if controller:
         doc["controller"] = controller
+    if keys:
+        doc["verificationMethod"] = [
+            {
+                "id": f"{did}#{key}",
+                "type": "Multikey",
+                "controller": did,
+                "publicKeyMultibase": key,
+            }
+            for key in keys
+        ]
+        doc["assertionMethod"] = [f"{did}#{key}" for key in keys]
+        # A tenant's keys also sign its presentations (its `whois.vp`).
+        if authenticate:
+            doc["authentication"] = [f"{did}#{key}" for key in keys]
+    # A component's presentations are signed by its controller, the tenant:
+    # its admins' keys, as methods of the tenant's DID.
+    if controller and controller_keys:
+        doc["authentication"] = [f"{controller}#{key}" for key in controller_keys]
     service: list[dict[str, Any]] = []
     if endpoint:
         service.append(
@@ -90,12 +145,15 @@ def document(
                 "serviceEndpoint": {"uri": endpoint, "accept": ["didcomm/v2"]},
             }
         )
-    if domain:
+    if domains:
+        origins = [f"https://{domain}" for domain in domains]
         service.append(
             {
                 "id": f"{did}#linked-domain",
                 "type": "LinkedDomains",
-                "serviceEndpoint": f"https://{domain}",
+                # One origin as a string, several as `origins` (DIF Well Known
+                # DID Configuration allows both).
+                "serviceEndpoint": origins[0] if len(origins) == 1 else {"origins": origins},
             }
         )
     if service:
@@ -103,16 +161,9 @@ def document(
     return doc
 
 
-async def did_of(db: AsyncSession, did_url: str, identity: Identity) -> str:
-    """An identity's DID: the domain's own for the root's, else under /ids/."""
-    if await is_root_identity(db, identity.id):
-        return domain_did(did_url)
-    return did_for(did_url, identity.slug)
-
-
-async def controller_for(db: AsyncSession, did_url: str, identity_id: uuid.UUID) -> str | None:
+async def controller_for(db: AsyncSession, identity_id: uuid.UUID) -> str | None:
     """The DID of the tenant an issuer's, verifier's or mediator's identity
-    belongs to; none for the tenant's own identity."""
+    belongs to; none for the tenant's own identity, or while it is pending."""
     for model in (Issuer, Verifier, Mediator):
         tenant_id = await db.scalar(select(model.tenant_id).where(model.identity_id == identity_id))
         if tenant_id is not None:
@@ -120,31 +171,24 @@ async def controller_for(db: AsyncSession, did_url: str, identity_id: uuid.UUID)
             if tenant is None or tenant.identity_id is None:
                 return None
             owner = await db.get(Identity, tenant.identity_id)
-            return None if owner is None else await did_of(db, did_url, owner)
+            return None if owner is None else owner.did
     return None
 
 
-async def linked_domain(db: AsyncSession, identity_id: uuid.UUID) -> str | None:
-    """The certified domain of the tenant whose own identity this is."""
-    domain: str | None = await db.scalar(
-        select(Certification.domain)
-        .join(Tenant, Tenant.id == Certification.tenant_id)
-        .where(Tenant.identity_id == identity_id, Certification.status == "approved")
+async def linked_domains(db: AsyncSession, identity_id: uuid.UUID) -> list[str]:
+    """The verified domains linked to the tenant whose own identity this is."""
+    tenant_id = await db.scalar(select(Tenant.id).where(Tenant.identity_id == identity_id))
+    if tenant_id is None:
+        return []
+    linked = await db.scalars(
+        select(TenantDomain.domain)
+        .where(TenantDomain.tenant_id == tenant_id, TenantDomain.verified_at.is_not(None))
+        .order_by(TenantDomain.created_at, TenantDomain.id)
     )
-    return domain
+    return list(linked)
 
 
-async def document_for(db: AsyncSession, did_url: str, identity: Identity) -> dict[str, Any]:
-    """The DID document `identity` publishes."""
-    return document(
-        await did_of(db, did_url, identity),
-        await endpoint_for(db, did_url, identity.id),
-        controller=await controller_for(db, did_url, identity.id),
-        domain=await linked_domain(db, identity.id),
-    )
-
-
-async def endpoint_for(db: AsyncSession, did_url: str, identity_id: uuid.UUID) -> str | None:
+async def endpoint_for(db: AsyncSession, identity_id: uuid.UUID) -> str | None:
     """Where the DIDComm messages of an identity go, from what acts as it."""
     url = await db.scalar(select(Mediator.url).where(Mediator.identity_id == identity_id))
     if url is not None:
@@ -156,10 +200,131 @@ async def endpoint_for(db: AsyncSession, did_url: str, identity_id: uuid.UUID) -
             .join(model, model.mediator_id == Mediator.id)
             .where(model.identity_id == identity_id)
         )
-        # A draft mediator's DID does not resolve: nothing to route through yet.
+        # A draft or pending mediator's DID does not resolve: nothing to route through yet.
         if mediator is not None and mediator.published_at is not None:
-            return did_for(did_url, mediator.identity.slug)
+            return mediator.identity.did
     return None
+
+
+async def _wallets(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
+    subjects = await db.scalars(
+        select(UserIdentity.subject).where(
+            UserIdentity.user_id == user_id, UserIdentity.provider == "almena"
+        )
+    )
+    return sorted({webvh.multikey(subject) for subject in subjects})
+
+
+async def signing_keys(db: AsyncSession, identity: Identity) -> list[str]:
+    """The multikeys that sign for the identity (see the module's **Keys**)."""
+    tenant = await db.scalar(select(Tenant).where(Tenant.identity_id == identity.id))
+    if tenant is not None:
+        return await update_keys(db, tenant.id)
+    item: Issuer | Verifier | None = await db.scalar(
+        select(Issuer).where(Issuer.identity_id == identity.id)
+    ) or await db.scalar(select(Verifier).where(Verifier.identity_id == identity.id))
+    if item is None or item.signing != "single_user" or item.signer_id is None:
+        return []
+    # A signer who left the tenant signs nothing.
+    member = await db.get(TenantMember, (item.tenant_id, item.signer_id))
+    return [] if member is None else await _wallets(db, item.signer_id)
+
+
+async def desired(db: AsyncSession, did_url: str, identity: Identity) -> dict[str, Any]:
+    """The document the identity should publish now: under its DID, or its
+    DID's template while it is pending."""
+    root = await is_root_identity(db, identity.id)
+    did = identity.did or template_for(did_url, identity.slug, root)
+    own = await db.scalar(select(Tenant.id).where(Tenant.identity_id == identity.id))
+    controller = await controller_for(db, identity.id)
+    return document(
+        did,
+        await endpoint_for(db, identity.id),
+        controller=controller,
+        domains=await linked_domains(db, identity.id),
+        keys=await signing_keys(db, identity),
+        authenticate=own is not None,
+        controller_keys=await update_keys(db, identity.tenant_id) if controller else None,
+    )
+
+
+async def update_keys(db: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
+    """Who may sign the tenant's identities: its admins' linked wallets."""
+    subjects = await db.scalars(
+        select(UserIdentity.subject)
+        .join(TenantMember, TenantMember.user_id == UserIdentity.user_id)
+        .where(
+            TenantMember.tenant_id == tenant_id,
+            TenantMember.role == "admin",
+            UserIdentity.provider == "almena",
+        )
+    )
+    return sorted({webvh.multikey(subject) for subject in subjects})
+
+
+async def log(db: AsyncSession, identity_id: uuid.UUID) -> list[webvh.Entry]:
+    """The identity's signed log, oldest first."""
+    rows = await db.scalars(
+        select(DidLogEntry.entry)
+        .where(DidLogEntry.identity_id == identity_id)
+        .order_by(DidLogEntry.version)
+    )
+    return [json.loads(row) for row in rows]
+
+
+def _unsigned(entry: webvh.Entry) -> webvh.Entry:
+    return {k: v for k, v in entry.items() if k != "proof"}
+
+
+async def next_entry(db: AsyncSession, did_url: str, identity: Identity) -> webvh.Entry | None:
+    """The entry that would bring the log to what the identity should publish;
+    `None` when it is already there. `LogError("no_signers")` when nobody
+    could sign it."""
+    entries = await log(db, identity.id)
+    state = await desired(db, did_url, identity)
+    keys = await update_keys(db, identity.tenant_id)
+    when = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not entries:
+        if not keys:
+            raise webvh.LogError("no_signers")
+        return webvh.genesis(str(state["id"]), state, keys, when)
+
+    active = webvh.active_update_keys(entries)
+    # With no admin wallet left the keys in force stay: a log cannot be left
+    # with nobody able to sign it.
+    parameters: dict[str, Any] = {"updateKeys": keys} if keys and keys != active else {}
+    if not parameters and webvh.jcs(state) == webvh.jcs(entries[-1]["state"]):
+        return None
+    if not active:
+        raise webvh.LogError("no_signers")
+    return webvh.following(_unsigned(entries[-1]), parameters, state, when)
+
+
+async def status_of(db: AsyncSession, did_url: str, identity: Identity) -> Status:
+    if identity.did is None:
+        return "pending"
+    try:
+        return "signed" if await next_entry(db, did_url, identity) is None else "outdated"
+    except webvh.LogError:
+        return "outdated"
+
+
+def keys_under(document: dict[str, Any] | None, relationship: str) -> list[str]:
+    """The multikeys a document lists under `relationship` (`assertionMethod`…)."""
+    if not document:
+        return []
+    did = str(document["id"])
+    return [
+        str(ref).removeprefix(f"{did}#")
+        for ref in document.get(relationship, [])
+        if str(ref).startswith(f"{did}#")
+    ]
+
+
+async def published(db: AsyncSession, identity: Identity) -> dict[str, Any] | None:
+    """The document the identity's log says now; `None` while pending."""
+    entries = await log(db, identity.id)
+    return entries[-1]["state"] if entries else None
 
 
 async def is_draft(db: AsyncSession, identity_id: uuid.UUID) -> bool:

@@ -10,7 +10,6 @@ import sys
 
 import uvicorn
 
-from registry_api import dids
 from registry_api.config import get_settings
 from registry_api.db import get_engine, get_sessionmaker
 from registry_api.mediators import MediatorError
@@ -32,7 +31,7 @@ def serve() -> None:
 async def init_root(name: str, admin: str, mediator_url: str) -> int:
     try:
         async with get_sessionmaker()() as db:
-            tenant, issuer, mediator = await create_root(db, name, admin, mediator_url)
+            tenant, mediator = await create_root(db, name, admin, mediator_url)
     except RootExists:
         print("init-root: there is a root tenant already", file=sys.stderr)
         return 1
@@ -41,12 +40,10 @@ async def init_root(name: str, admin: str, mediator_url: str) -> int:
         return 2
     finally:
         await get_engine().dispose()
-    did_url = get_settings().did_url
-    print(f"Root tenant {tenant.id} ({name}): {dids.domain_did(did_url)}")
-    print(f"Its issuer {issuer.name}: {dids.did_for(did_url, issuer.identity.slug)}")
-    print(f"Its mediator {mediator.name} at {mediator.url}: ", end="")
-    print(dids.did_for(did_url, mediator.identity.slug))
-    print(f"{admin} runs it once they sign in to the portal with that address.")
+    print(f"Root tenant {tenant.id} ({name}) and its mediator {mediator.name}")
+    print(f"at {mediator.url}: their DIDs are pending signature.")
+    print(f"{admin} runs it once they sign in to the portal with that address; an admin")
+    print("with a linked Almena wallet signs the identities, and then they resolve.")
     return 0
 
 

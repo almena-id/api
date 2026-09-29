@@ -1,4 +1,8 @@
-"""What a certification request is checked against: its domain and its logo."""
+"""Proving a domain with DNS: a TXT record the owner publishes.
+
+A tenant links a domain (`api/routes/domains.py`) and gets the record that
+proves it: ``_almena.{domain}`` saying ``almena-verify={token}``.
+"""
 
 import re
 import secrets
@@ -11,12 +15,11 @@ import dns.resolver
 # Where the proof is published, and how it starts.
 DNS_LABEL = "_almena"
 DNS_PREFIX = "almena-verify="
-LOGO_MAX_BYTES = 256 * 1024
 
 _LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
 
 
-class CertificationError(Exception):
+class DomainError(Exception):
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
@@ -30,12 +33,12 @@ def domain(typed: str) -> str:
     try:
         value = value.encode("idna").decode("ascii")
     except UnicodeError:
-        raise CertificationError("domain_invalid") from None
+        raise DomainError("domain_invalid") from None
     labels = value.split(".")
     if len(value) > 253 or len(labels) < 2 or not all(_LABEL.match(label) for label in labels):
-        raise CertificationError("domain_invalid")
+        raise DomainError("domain_invalid")
     if labels[-1].isdigit():
-        raise CertificationError("domain_invalid")
+        raise DomainError("domain_invalid")
     return value
 
 
@@ -58,23 +61,10 @@ async def txt_records(name: str) -> list[str]:
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
         return []
     except dns.exception.Timeout:
-        raise CertificationError("dns_unavailable") from None
+        raise DomainError("dns_unavailable") from None
     return [b"".join(record.strings).decode(errors="replace") for record in answer]
 
 
 def get_txt_lookup() -> TxtLookup:
     """FastAPI dependency; tests override it."""
     return txt_records
-
-
-def logo_type(data: bytes) -> str:
-    """The logo's media type, read from its bytes rather than from what it claims."""
-    if len(data) > LOGO_MAX_BYTES:
-        raise CertificationError("logo_too_large")
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    raise CertificationError("logo_invalid")

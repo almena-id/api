@@ -1,12 +1,14 @@
 """An identity (DID) the tenant holds: the tenant's register of DIDs. The
-tenant and each of its issuers and verifiers have one of their own.
+tenant and each of its issuers, verifiers and mediators have one of their own.
 
-Its DID is the `did:web` this API serves for its slug (see `registry_api.dids`);
-where its keys live is still to be decided, and arrives as columns then."""
+Its DID is a `did:webvh` this API serves for its slug (see `registry_api.dids`),
+and exists once a tenant admin has signed its first log entry from a wallet;
+until then it is pending. The log itself is `DidLogEntry`."""
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from registry_api.models.base import Base, TimestampMixin, slug_column
@@ -21,3 +23,26 @@ class Identity(TimestampMixin, Base):
         Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(200))
+    # `did:webvh:{SCID}:…`, set when the first log entry is signed.
+    did: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # An issuer's, verifier's or mediator's `whois.vp`: its tenant's signed
+    # endorsement, presented by the tenant as its controller; set when it is
+    # published, cleared when it is taken back. And until when it holds.
+    presentation: Mapped[str | None] = mapped_column(Text)
+    endorsed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DidLogEntry(TimestampMixin, Base):
+    """One line of an identity's did:webvh log, as published: signed."""
+
+    __tablename__ = "did_log_entries"
+    __table_args__ = (UniqueConstraint("identity_id", "version"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    identity_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("identities.id", ondelete="CASCADE"), index=True
+    )
+    # The number in its `versionId` (1, 2, …).
+    version: Mapped[int] = mapped_column(Integer)
+    # The entry as a JSON line, proof included, exactly as served.
+    entry: Mapped[str] = mapped_column(Text)

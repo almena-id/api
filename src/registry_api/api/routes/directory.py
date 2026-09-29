@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal, cast
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import dids, mediators
 from registry_api.api.routes.auth import CurrentSession, DbSession
@@ -123,29 +124,57 @@ class ItemOut(BaseModel):
     used_by: list[Use] | None = None
     # Issuers, verifiers and mediators: when published; `null` while a draft.
     published_at: datetime | None = None
+    # In lists: where the DID's signature stands (its identity's, or its own).
+    signature: dids.Status | None = None
 
 
-class IdentityDetail(BaseModel):
+class Signed(BaseModel):
+    """Where an identity's DID stands: its did:webvh DID once its first log
+    entry is signed (`null` while pending); `signature` says whether what it
+    should publish (`document`) is what it last signed; the URLs where its log
+    and its did:web document are served (`null` while pending)."""
+
+    did: str | None
+    signature: dids.Status
+    document: dict[str, Any]
+    # What the log says now, as signed; `null` while pending.
+    signed_document: dict[str, Any] | None
+    log_url: str | None
+    document_url: str | None
+    # A published issuer's, verifier's or mediator's endorsement by its
+    # tenant: where its `whois.vp` is, and until when it holds.
+    whois_url: str | None = None
+    endorsed_until: datetime | None = None
+
+
+class IdentityDetail(Signed):
     id: uuid.UUID
     name: str
     created_at: datetime
-    did: str
     # The tenant, issuer or verifier that acts as it.
     used_by: list[Use]
-    # What `did` resolves to, and the URL it is published at.
-    document: dict[str, Any]
-    document_url: str
-    # Whether `document_url` answers: not while what acts as it is a draft.
+    # Whether the URLs answer: not while what acts as it is a draft.
     published: bool
 
 
-class ItemDetail(ItemOut):
-    """An issuer, verifier or mediator, opened on its own: with its DID, the
-    document it resolves to and where that is published (a draft's is not)."""
+class ItemDetail(Signed, ItemOut):
+    """An issuer, verifier or mediator, opened on its own: with its identity's
+    DID, the document it should publish and where it is (a draft's is not)."""
 
-    did: str
-    document: dict[str, Any]
-    document_url: str
+
+async def signed_of(db: AsyncSession, identity: Identity) -> Signed:
+    did_url = get_settings().did_url
+    base = dids.base_url(did_url, identity.slug, await dids.is_root_identity(db, identity.id))
+    return Signed(
+        did=identity.did,
+        signature=await dids.status_of(db, did_url, identity),
+        document=await dids.desired(db, did_url, identity),
+        signed_document=await dids.published(db, identity),
+        log_url=f"{base}/did.jsonl" if identity.did else None,
+        document_url=f"{base}/did.json" if identity.did else None,
+        whois_url=f"{base}/whois.vp" if identity.presentation else None,
+        endorsed_until=identity.endorsed_until,
+    )
 
 
 class Page(BaseModel):
@@ -236,8 +265,15 @@ async def _page(
     more = len(rows) > limit
     rows = rows[:limit]
     uses = await _uses(db, [r.id for r in rows]) if model is Identity else {}
+    did_url = get_settings().did_url
+    items = []
+    for row in rows:
+        item = _out(row, uses.get(row.id) if model is Identity else None)
+        identity = row if isinstance(row, Identity) else row.identity
+        item.signature = await dids.status_of(db, did_url, identity)
+        items.append(item)
     return Page(
-        items=[_out(row, uses.get(row.id) if model is Identity else None) for row in rows],
+        items=items,
         next_cursor=_encode(rows[-1]) if more else None,
         total=total,
     )
@@ -350,13 +386,10 @@ async def _described(
     return item
 
 
-async def item_detail(db: DbSession, item: Issuer | Verifier | Mediator) -> ItemDetail:
-    did_url = get_settings().did_url
+async def item_detail(db: AsyncSession, item: Issuer | Verifier | Mediator) -> ItemDetail:
     return ItemDetail(
-        **_out(item).model_dump(),
-        did=dids.did_for(did_url, item.identity.slug),
-        document=await dids.document_for(db, did_url, item.identity),
-        document_url=dids.url_for(did_url, item.identity.slug),
+        **_out(item).model_dump(exclude={"signature"}),
+        **(await signed_of(db, item.identity)).model_dump(),
     )
 
 
@@ -480,6 +513,31 @@ async def list_identities(
     return await _page(db, Identity, tenant_id, limit, cursor)
 
 
+class Waiting(BaseModel):
+    id: uuid.UUID
+    name: str
+    signature: dids.Status
+
+
+@router.get(
+    "/signatures",
+    summary="The tenant's identities whose DID waits for a signature (pending or outdated)",
+)
+async def waiting_signatures(tenant_id: TenantId, db: DbSession) -> list[Waiting]:
+    did_url = get_settings().did_url
+    identities = await db.scalars(
+        select(Identity)
+        .where(Identity.tenant_id == tenant_id)
+        .order_by(Identity.created_at, Identity.id)
+    )
+    waiting = []
+    for identity in identities:
+        state = await dids.status_of(db, did_url, identity)
+        if state != "signed":
+            waiting.append(Waiting(id=identity.id, name=identity.name, signature=state))
+    return waiting
+
+
 @router.get("/identities/{identity_id}", summary="One identity, with its DID document")
 async def get_identity(
     tenant_id: TenantId, identity_id: uuid.UUID, db: DbSession
@@ -487,23 +545,13 @@ async def get_identity(
     identity = await db.get(Identity, identity_id)
     if identity is None or identity.tenant_id != tenant_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="identity_not_found")
-    did_url = get_settings().did_url
-    if await dids.is_root_identity(db, identity.id):
-        did, document_url = dids.domain_did(did_url), dids.domain_url(did_url)
-    else:
-        did, document_url = (
-            dids.did_for(did_url, identity.slug),
-            dids.url_for(did_url, identity.slug),
-        )
     return IdentityDetail(
         id=identity.id,
         name=identity.name,
         created_at=identity.created_at,
-        did=did,
         used_by=(await _uses(db, [identity.id]))[identity.id],
-        document=await dids.document_for(db, did_url, identity),
-        document_url=document_url,
         published=not await dids.is_draft(db, identity.id),
+        **(await signed_of(db, identity)).model_dump(),
     )
 
 

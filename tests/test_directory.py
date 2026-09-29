@@ -1,3 +1,4 @@
+import json
 import uuid
 from urllib.parse import quote, urlsplit
 
@@ -6,6 +7,8 @@ from httpx import AsyncClient
 
 from registry_api.config import get_settings
 from tests.conftest import Outbox
+from tests.fake_wallet import FakeWallet
+from tests.signing import link_wallet, publish, ready, sign
 
 
 async def _sign_in(client: AsyncClient, outbox: Outbox, email: str) -> tuple[dict[str, str], str]:
@@ -36,6 +39,8 @@ async def test_create_then_list(client: AsyncClient, outbox: Outbox, kind: str) 
     listed = (await client.get(base, headers=headers)).json()
     assert [i["name"] for i in listed["items"]] == ["Acme"]
     assert listed["total"] == 1
+    # Each row says where its DID's signature stands: nothing signed yet.
+    assert listed["items"][0]["signature"] == "pending"
 
 
 async def test_descriptions_are_kept(client: AsyncClient, outbox: Outbox) -> None:
@@ -130,57 +135,136 @@ async def test_an_identity_shows_its_did_document(client: AsyncClient, outbox: O
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
     issuer = (await client.post(f"{base}/issuers", json={"name": "Uni"}, headers=headers)).json()
+    identity_url = f"{base}/identities/{issuer['identity']['id']}"
 
-    response = await client.get(f"{base}/identities/{issuer['identity']['id']}", headers=headers)
+    response = await client.get(identity_url, headers=headers)
     assert response.status_code == 200, response.text
-    detail = response.json()
-    assert detail["name"] == "Uni"
-    assert detail["used_by"] == [{"kind": "issuer", "id": issuer["id"], "name": "Uni"}]
-    did = detail["did"]
-    # Made from the identity domain, not the API's origin.
-    host = urlsplit(get_settings().did_url).netloc
-    assert did.startswith(f"did:web:{quote(host, safe='')}:ids:idn_")
-    # Its tenant controls it; no mediator yet: nothing to route messages through.
+    pending = response.json()
+    assert pending["name"] == "Uni"
+    assert pending["used_by"] == [{"kind": "issuer", "id": issuer["id"], "name": "Uni"}]
+    # No DID until an admin signs it: the document is written with its template.
+    assert pending["did"] is None and pending["signature"] == "pending"
+    assert pending["log_url"] is None and pending["document_url"] is None
+    host = quote(urlsplit(get_settings().did_url).netloc, safe="")
+    assert pending["document"]["id"].startswith(f"did:webvh:{{SCID}}:{host}:ids:idn_")
+    published = await client.post(
+        f"{base}/issuers/{issuer['id']}/publish", json={}, headers=headers
+    )
+    assert published.status_code == 409 and published.json()["detail"] == "identity_pending"
+    waiting = (await client.get(f"{base}/signatures", headers=headers)).json()
+    assert {(w["name"], w["signature"]) for w in waiting} >= {("Uni", "pending")}
+
+    # Ada links a wallet; she signs the tenant's identity, then the issuer's.
+    wallet = FakeWallet()
+    await link_wallet(client, headers, wallet)
     own = (await client.get(base, headers=headers)).json()["identity"]["id"]
+    await sign(client, headers, tenant, own, wallet)
     tenant_did = (await client.get(f"{base}/identities/{own}", headers=headers)).json()["did"]
+    request = await sign(client, headers, tenant, issuer["identity"]["id"], wallet)
+    assert request["sign"]["version"] == 1 and request["sign"]["did"] is None
+
+    detail = (await client.get(identity_url, headers=headers)).json()
+    did = detail["did"]
+    assert did.startswith("did:webvh:Qm") and f":{host}:ids:idn_" in did
+    assert detail["signature"] == "signed"
+    # Its tenant controls it, and presents for it with its admins' keys.
+    key = wallet.did.removeprefix("did:key:")
     assert detail["document"] == {
         "@context": ["https://www.w3.org/ns/did/v1"],
         "id": did,
         "controller": tenant_did,
+        "authentication": [f"{tenant_did}#{key}"],
     }
 
-    # The same document, public once published, where did:web resolves it.
-    await client.post(f"{base}/issuers/{issuer['id']}/publish", headers=headers)
+    # Public once published: the log, and the document under its did:web name.
+    await publish(client, headers, tenant, "issuers", issuer["id"], wallet)
     slug = did.rsplit(":", 1)[1]
-    assert detail["document_url"] == f"{get_settings().did_url}/ids/{slug}/did.json"
-    published = await client.get(f"/ids/{slug}/did.json")
-    assert published.status_code == 200
-    assert published.headers["content-type"] == "application/did+json"
-    assert published.json() == detail["document"]
+    assert detail["log_url"] == f"{get_settings().did_url}/ids/{slug}/did.jsonl"
+    log = await client.get(f"/ids/{slug}/did.jsonl")
+    assert log.status_code == 200 and log.headers["content-type"].startswith("text/jsonl")
+    entries = [json.loads(line) for line in log.text.splitlines()]
+    assert [e["versionId"].split("-")[0] for e in entries] == ["1"]
+    assert entries[0]["parameters"]["updateKeys"] == [wallet.did.removeprefix("did:key:")]
+    web = await client.get(f"/ids/{slug}/did.json")
+    assert web.headers["content-type"] == "application/did+json"
+    assert web.json()["id"] == f"did:web:{host}:ids:{slug}"
+    assert web.json()["alsoKnownAs"] == [did]
+
+    # A change to what it should publish waits for a signature.
+    body = {"name": "Relay", "url": "https://mediator.example.org"}
+    mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
+    await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
+    await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
+    patch = {"mediator_id": mediator["id"]}
+    await client.patch(f"{base}/issuers/{issuer['id']}", json=patch, headers=headers)
+    outdated = (await client.get(identity_url, headers=headers)).json()
+    assert outdated["signature"] == "outdated"
+    # What it should say now, beside what was last signed.
+    assert "service" in outdated["document"]
+    assert "service" not in outdated["signed_document"]
+    second = await sign(client, headers, tenant, issuer["identity"]["id"], wallet)
+    assert second["sign"]["version"] == 2 and second["sign"]["did"] == did
+    lines = (await client.get(f"/ids/{slug}/did.jsonl")).text.splitlines()
+    assert len(lines) == 2
+    assert (await client.get(identity_url, headers=headers)).json()["signature"] == "signed"
+    waiting = (await client.get(f"{base}/signatures", headers=headers)).json()
+    assert issuer["identity"]["id"] not in [w["id"] for w in waiting]
+    nothing = await client.post(f"{identity_url}/sign", json={}, headers=headers)
+    assert nothing.status_code == 409 and nothing.json()["detail"] == "up_to_date"
 
 
 async def test_the_did_document_names_the_mediator(client: AsyncClient, outbox: Outbox) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
+    wallet = await ready(client, headers, tenant)
     body = {"name": "Relay", "url": "https://mediator.example.org"}
     mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
     await client.patch(base, json={"mediator_id": mediator["id"]}, headers=headers)
-    # Nothing routes through a draft mediator.
-    await client.post(f"{base}/mediators/{mediator['id']}/publish", headers=headers)
+    identity_id = (await client.get(base, headers=headers)).json()["identity"]["id"]
+    # Nothing routes through a mediator whose DID does not resolve yet.
+    detail = (await client.get(f"{base}/identities/{identity_id}", headers=headers)).json()
+    assert "service" not in detail["document"]
+
+    await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
+    await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
     mediator_did = (await client.get(f"{base}/mediators/{mediator['id']}", headers=headers)).json()[
         "did"
     ]
-    identity_id = (await client.get(base, headers=headers)).json()["identity"]["id"]
-
     detail = (await client.get(f"{base}/identities/{identity_id}", headers=headers)).json()
     assert detail["used_by"][0]["kind"] == "tenant"
     assert detail["document"]["service"] == [
         {
-            "id": f"{detail['did']}#didcomm",
+            "id": f"{detail['document']['id']}#didcomm",
             "type": "DIDCommMessaging",
             "serviceEndpoint": {"uri": mediator_did, "accept": ["didcomm/v2"]},
         }
     ]
+
+
+async def test_only_an_admin_with_a_wallet_signs(client: AsyncClient, outbox: Outbox) -> None:
+    ada, tenant = await _sign_in(client, outbox, "ada@example.org")
+    own = (await client.get(f"/api/v1/tenants/{tenant}", headers=ada)).json()["identity"]["id"]
+    url = f"/api/v1/tenants/{tenant}/identities/{own}/sign"
+    # No admin has a wallet yet: nobody could sign.
+    none = await client.post(url, json={}, headers=ada)
+    assert none.status_code == 409 and none.json()["detail"] == "no_signers"
+
+    await link_wallet(client, ada, FakeWallet())
+    await client.post(
+        f"/api/v1/tenants/{tenant}/invitations",
+        json={"email": "bob@example.org", "role": "admin"},
+        headers=ada,
+    )
+    bob, _ = await _sign_in(client, outbox, "bob@example.org")
+    # Bob is an admin without a wallet: not one of the update keys.
+    refused = await client.post(url, json={}, headers=bob)
+    assert refused.status_code == 403 and refused.json()["detail"] == "not_a_signer"
+
+    # A wallet that is an update key but not the asking admin's is refused.
+    asked = (await client.post(url, json={}, headers=ada)).json()
+    request = (await client.get(asked["request_uri"])).json()
+    answered = await client.post(request["response_uri"], json=FakeWallet().answer(request))
+    assert answered.status_code == 400 and answered.json()["detail"] == "not_an_update_key"
 
 
 async def test_identities_stay_in_their_tenant(client: AsyncClient, outbox: Outbox) -> None:
@@ -205,7 +289,7 @@ async def test_one_opens_and_changes(client: AsyncClient, outbox: Outbox, kind: 
 
     detail = (await client.get(url, headers=headers)).json()
     assert detail["name"] == "Uni" and detail["mediator"] is None
-    assert detail["did"].split(":")[-2:][0] == "ids"
+    assert detail["did"] is None and detail["signature"] == "pending"
 
     patch = {"name": " Uni 2 ", "description": "Degrees", "mediator_id": mediator["id"]}
     changed = await client.patch(url, json=patch, headers=headers)

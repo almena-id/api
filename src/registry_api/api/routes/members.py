@@ -27,7 +27,8 @@ class MemberOut(BaseModel):
     # Members only: their account, and what they like to be called.
     user_id: uuid.UUID | None = None
     alias: str | None = None
-    email: str
+    # `null` for a member whose account has no email.
+    email: str | None
     role: Role
     # When they joined, or when they were invited.
     since: datetime
@@ -115,7 +116,7 @@ async def invite(
         await mailer.send_invitation(
             email,
             tenant=tenant.name,
-            inviter=session.user.email,
+            inviter=session.user.alias or session.user.email,
             role=body.role,
             locale=body.locale,
         )

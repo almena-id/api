@@ -2,16 +2,16 @@
 
 import uuid
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Exists, exists, select
+from sqlalchemy import select
 
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import IdentityRef, MediatorRef, TenantId, tenant_mediator
 from registry_api.api.routes.members import admin_of
-from registry_api.models import Certification, Identity, Mediator, Tenant, TenantMember
+from registry_api.models import Identity, Mediator, Tenant, TenantMember
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
@@ -22,8 +22,6 @@ class TenantOut(BaseModel):
     created_at: datetime
     # The signed-in user's role in it: what the portal offers depends on it.
     role: str
-    # Almena has approved a certification of it, in force now.
-    certified: bool
 
 
 class TenantDetail(TenantOut):
@@ -39,10 +37,6 @@ class TenantIn(BaseModel):
     mediator_id: uuid.UUID | None = None
 
 
-def _certified(tenant_id: Any) -> Exists:
-    return exists().where(Certification.tenant_id == tenant_id, Certification.status == "approved")
-
-
 async def _detail(db: DbSession, tenant: Tenant, role: str) -> TenantDetail:
     identity = await db.get(Identity, tenant.identity_id) if tenant.identity_id else None
     mediator = await db.get(Mediator, tenant.mediator_id) if tenant.mediator_id else None
@@ -51,7 +45,6 @@ async def _detail(db: DbSession, tenant: Tenant, role: str) -> TenantDetail:
         name=tenant.name,
         created_at=tenant.created_at,
         role=role,
-        certified=bool(await db.scalar(select(_certified(tenant.id)))),
         identity=IdentityRef(id=identity.id, name=identity.name) if identity else None,
         mediator=MediatorRef(id=mediator.id, name=mediator.name) if mediator else None,
     )
@@ -60,15 +53,12 @@ async def _detail(db: DbSession, tenant: Tenant, role: str) -> TenantDetail:
 @router.get("", summary="The signed-in user's tenants, oldest first")
 async def list_tenants(session: CurrentSession, db: DbSession) -> list[TenantOut]:
     rows = await db.execute(
-        select(Tenant, TenantMember.role, _certified(Tenant.id))
+        select(Tenant, TenantMember.role)
         .join(TenantMember, TenantMember.tenant_id == Tenant.id)
         .where(TenantMember.user_id == session.user_id)
         .order_by(Tenant.created_at, Tenant.id)
     )
-    return [
-        TenantOut(id=t.id, name=t.name, created_at=t.created_at, role=role, certified=certified)
-        for t, role, certified in rows
-    ]
+    return [TenantOut(id=t.id, name=t.name, created_at=t.created_at, role=role) for t, role in rows]
 
 
 @router.get("/{tenant_id}", summary="A tenant's details")

@@ -77,6 +77,14 @@ tasks:
     cmds:
       - uv run registry-api init-root {{.CLI_ARGS}}
 
+  wallet:
+    desc: "Answer a wallet request as a stand-in wallet (task wallet -- 'almena://auth?request_uri=…')"
+    deps: [install]
+    requires:
+      vars: [CLI_ARGS]
+    cmds:
+      - uv run python -m tests.fake_wallet {{.CLI_ARGS}}
+
   dev:
     desc: Run the API locally with auto-reload against PostgreSQL and Mailpit in Docker
     deps: [db:migrate, mail]

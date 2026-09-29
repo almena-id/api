@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -13,32 +13,12 @@ from httpx import AsyncClient
 from pydantic import SecretStr
 
 from registry_api.api.routes.auth import get_http_client
-from registry_api.config import Settings, get_settings
+from registry_api.config import Settings
 from registry_api.main import app
 from tests.conftest import Outbox
 
 Handler = Callable[[httpx.Request], httpx.Response]
 PERSONAL_MICROSOFT = "9188040d-6c67-4c5b-b112-36a304b66dad"
-
-
-@pytest.fixture
-def settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
-    s = get_settings()
-    monkeypatch.setattr(s, "portal_url", "http://portal.test")
-    for name, value in {
-        "google_client_id": "google-id",
-        "google_client_secret": "google-secret",
-        "microsoft_client_id": "ms-id",
-        "microsoft_client_secret": "ms-secret",
-        "github_client_id": "gh-id",
-        "github_client_secret": "gh-secret",
-    }.items():
-        monkeypatch.setattr(s, name, value if name.endswith("_id") else _secret(value))
-    yield s
-
-
-def _secret(value: str) -> SecretStr:
-    return SecretStr(value)
 
 
 def _provider_answers(handler: Handler) -> list[httpx.Request]:
@@ -254,7 +234,7 @@ async def test_apple_signs_its_client_secret(
         "apple_key_id": "KEY123",
     }.items():
         monkeypatch.setattr(settings, name, value)
-    monkeypatch.setattr(settings, "apple_private_key", _secret(pem))
+    monkeypatch.setattr(settings, "apple_private_key", SecretStr(pem))
 
     query = await _start(client, "apple")
     assert query["response_mode"] == "form_post"

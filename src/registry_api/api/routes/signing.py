@@ -19,7 +19,7 @@ from sqlalchemy import select
 from registry_api.api.routes.auth import DbSession
 from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.members import admin_of
-from registry_api.models import Issuer, TenantMember, User, Verifier
+from registry_api.models import Issuer, TenantMember, User, UserIdentity, Verifier
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["signing"])
 
@@ -32,10 +32,13 @@ MODELS: dict[str, type[Issuer | Verifier]] = {"issuers": Issuer, "verifiers": Ve
 
 class Signer(BaseModel):
     id: uuid.UUID
-    email: str
+    email: str | None
     alias: str | None
     # Whether they still belong to the tenant: a signer who left signs nothing.
     member: bool
+    # Whether they have an Almena wallet linked: without one there is no key
+    # to put in the DID document, so nothing they sign can be checked.
+    wallet: bool
 
 
 class SigningOut(BaseModel):
@@ -66,8 +69,17 @@ async def _out(db: DbSession, item: Issuer | Verifier) -> SigningOut:
         user = await db.get(User, item.signer_id)
         if user is not None:
             member = await db.get(TenantMember, (item.tenant_id, user.id))
+            wallet = await db.scalar(
+                select(UserIdentity.id)
+                .where(UserIdentity.user_id == user.id, UserIdentity.provider == "almena")
+                .limit(1)
+            )
             signer = Signer(
-                id=user.id, email=user.email, alias=user.alias, member=member is not None
+                id=user.id,
+                email=user.email,
+                alias=user.alias,
+                member=member is not None,
+                wallet=wallet is not None,
             )
     return SigningOut(system=cast(System | None, item.signing), signer=signer)
 

@@ -6,8 +6,11 @@
 
 Or through a provider (Google, Microsoft, Apple, GitHub): ``/auth/oauth/…/start``
 gives the portal the URL to send the browser to, and ``…/callback`` turns what
-the provider sent back into a session. Both paths meet on the email: an account
-is one address, however it signs in.
+the provider sent back into a session. A provider account signing in for the
+first time joins the account with the address it vouches for, or starts one.
+
+An account may have other ways in besides its email, or none at all but those:
+``account.py`` links and unlinks them.
 
 A session is an opaque bearer token; the portal keeps it in an HTTP-only
 cookie on its own origin and sends it as ``Authorization: Bearer``.
@@ -45,7 +48,6 @@ from registry_api.models import (
     User,
     UserIdentity,
 )
-from registry_api.root import is_reviewer
 from registry_api.security import digest, new_code, new_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -70,14 +72,10 @@ class CodeCheck(BaseModel):
 
 class UserOut(BaseModel):
     id: uuid.UUID
-    email: str
+    # `null` for an account that signs in only through a provider or its wallet.
+    email: str | None
     alias: str | None
     created_at: datetime
-
-
-class Me(UserOut):
-    # A member of the Almena tenant: reviews certification requests.
-    reviewer: bool
 
 
 class AccountIn(BaseModel):
@@ -128,7 +126,7 @@ def _code_hash(email: str, code: str) -> bytes:
     return digest(f"{email}:{code}")
 
 
-def _as_utc(moment: datetime) -> datetime:
+def as_utc(moment: datetime) -> datetime:
     # PostgreSQL hands back aware datetimes; SQLite (the tests) naive UTC ones.
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
@@ -156,6 +154,19 @@ async def current_session(
 
 
 CurrentSession = Annotated[Session, Depends(current_session)]
+
+
+async def optional_session(
+    db: DbSession,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+) -> Session | None:
+    """The session when a bearer token comes and holds; `None` without one."""
+    if credentials is None:
+        return None
+    return await current_session(db, credentials)
+
+
+OptionalSession = Annotated[Session | None, Depends(optional_session)]
 
 
 @router.post(
@@ -197,28 +208,36 @@ async def send_code(
 )
 async def verify_code(body: CodeCheck, db: DbSession) -> SignedIn:
     email = body.email.lower()
+    await check_code(db, email, body.code)
+    return await sign_in(db, await _user_for_email(db, email, body.locale))
+
+
+async def check_code(db: AsyncSession, email: str, code: str) -> None:
+    """Spend the code emailed to `email`, or refuse (`invalid_code`, `too_many_attempts`)."""
     settings = get_settings()
     login_code = await db.scalar(select(LoginCode).where(LoginCode.email == email))
-    if login_code is None or _as_utc(login_code.expires_at) <= datetime.now(UTC):
+    if login_code is None or as_utc(login_code.expires_at) <= datetime.now(UTC):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="invalid_code")
     if login_code.attempts >= settings.login_code_max_attempts:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="too_many_attempts")
-    if not hmac.compare_digest(login_code.code_hash, _code_hash(email, body.code)):
+    if not hmac.compare_digest(login_code.code_hash, _code_hash(email, code)):
         login_code.attempts += 1
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="invalid_code")
-
     # A code is good once.
     await db.delete(login_code)
-    return await _sign_in(db, await _user_for_email(db, email, body.locale))
 
 
-async def new_tenant(db: AsyncSession, name: str) -> Tenant:
-    """A tenant, with its own identity named like it."""
+async def new_tenant(
+    db: AsyncSession, name: str | None, identity_name: str | None = None
+) -> Tenant:
+    """A tenant, with its own identity named like it (or `identity_name`, unnamed)."""
     tenant = Tenant(name=name)
     db.add(tenant)
     await db.flush()
-    identity = Identity(tenant_id=tenant.id, name=name, created_at=datetime.now(UTC))
+    identity = Identity(
+        tenant_id=tenant.id, name=name or identity_name or "", created_at=datetime.now(UTC)
+    )
     db.add(identity)
     await db.flush()
     tenant.identity_id = identity.id
@@ -255,8 +274,10 @@ async def _user_for_email(db: AsyncSession, email: str, locale: Locale = "en") -
     return user
 
 
-async def _accept_invitations(db: AsyncSession, user: User) -> None:
-    """Signing in with an address is what accepts the invitations sent to it."""
+async def accept_invitations(db: AsyncSession, user: User) -> None:
+    """Signing in with an address, or linking it, accepts the invitations sent to it."""
+    if user.email is None:
+        return
     invitations = list(
         await db.scalars(select(TenantInvitation).where(TenantInvitation.email == user.email))
     )
@@ -269,8 +290,8 @@ async def _accept_invitations(db: AsyncSession, user: User) -> None:
     await db.flush()
 
 
-async def _sign_in(db: AsyncSession, user: User) -> SignedIn:
-    await _accept_invitations(db, user)
+async def sign_in(db: AsyncSession, user: User) -> SignedIn:
+    await accept_invitations(db, user)
     token = new_token()
     expires_at = datetime.now(UTC) + timedelta(hours=get_settings().session_ttl_hours)
     db.add(Session(user_id=user.id, token_hash=digest(token), expires_at=expires_at))
@@ -278,7 +299,7 @@ async def _sign_in(db: AsyncSession, user: User) -> SignedIn:
     return SignedIn(token=token, expires_at=expires_at, user=_user_out(user))
 
 
-def _provider(provider: str) -> oauth.ProviderId:
+def known_provider(provider: str) -> oauth.ProviderId:
     known = next((p for p in oauth.PROVIDERS if p == provider), None)
     if known is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="unknown_provider")
@@ -304,7 +325,13 @@ async def providers() -> Providers:
     },
 )
 async def oauth_start(provider: str, db: DbSession) -> OAuthStart:
-    provider_id = _provider(provider)
+    return await begin_oauth(db, known_provider(provider))
+
+
+async def begin_oauth(
+    db: AsyncSession, provider_id: oauth.ProviderId, user_id: uuid.UUID | None = None
+) -> OAuthStart:
+    """A flow to a provider; `user_id` when that account is linking it, not signing in."""
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(64)
     nonce = secrets.token_urlsafe(24)
@@ -317,6 +344,7 @@ async def oauth_start(provider: str, db: DbSession) -> OAuthStart:
             provider=provider_id,
             code_verifier=verifier,
             nonce=nonce,
+            user_id=user_id,
             expires_at=datetime.now(UTC) + timedelta(minutes=10),
         )
     )
@@ -344,25 +372,8 @@ async def oauth_callback(
     db: DbSession,
     http: Annotated[httpx.AsyncClient, Depends(get_http_client)],
 ) -> SignedIn:
-    provider_id = _provider(provider)
-    flow = await db.scalar(
-        select(OAuthFlow).where(
-            OAuthFlow.state_hash == digest(body.state), OAuthFlow.provider == provider_id
-        )
-    )
-    if flow is None or _as_utc(flow.expires_at) <= datetime.now(UTC):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_state")
-    # A flow is good once, whatever the provider says next.
-    verifier, nonce = flow.code_verifier, flow.nonce
-    await db.delete(flow)
-    await db.commit()
-
-    try:
-        identity = await oauth.exchange(
-            get_settings(), provider_id, http, code=body.code, verifier=verifier, nonce=nonce
-        )
-    except oauth.OAuthError as error:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=error.code) from None
+    provider_id = known_provider(provider)
+    identity = await finish_oauth(db, http, provider_id, body)
 
     linked = await db.scalar(
         select(UserIdentity).where(
@@ -370,7 +381,7 @@ async def oauth_callback(
         )
     )
     if linked is not None:
-        return await _sign_in(db, await db.get_one(User, linked.user_id))
+        return await sign_in(db, await db.get_one(User, linked.user_id))
 
     # Only an address the provider vouches for may create an account or join
     # one: otherwise anyone could sign in as somebody else's email.
@@ -385,13 +396,44 @@ async def oauth_callback(
             email=identity.email,
         )
     )
-    return await _sign_in(db, user)
+    return await sign_in(db, user)
 
 
-@router.get("/me", summary="The signed-in account, and whether it reviews for Almena")
-async def me(session: CurrentSession, db: DbSession) -> Me:
-    user = _user_out(session.user)
-    return Me(**user.model_dump(), reviewer=await is_reviewer(db, session.user_id))
+async def finish_oauth(
+    db: AsyncSession,
+    http: httpx.AsyncClient,
+    provider_id: oauth.ProviderId,
+    body: OAuthCallback,
+    user_id: uuid.UUID | None = None,
+) -> oauth.Identity:
+    """What the provider says about the account, for the flow `body.state` names.
+
+    A flow started to link a provider (`user_id`) finishes only for that
+    account, and a sign-in flow only as a sign-in.
+    """
+    flow = await db.scalar(
+        select(OAuthFlow).where(
+            OAuthFlow.state_hash == digest(body.state), OAuthFlow.provider == provider_id
+        )
+    )
+    if flow is None or as_utc(flow.expires_at) <= datetime.now(UTC) or flow.user_id != user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_state")
+    # A flow is good once, whatever the provider says next.
+    verifier, nonce = flow.code_verifier, flow.nonce
+    await db.delete(flow)
+    await db.commit()
+
+    try:
+        return await oauth.exchange(
+            get_settings(), provider_id, http, code=body.code, verifier=verifier, nonce=nonce
+        )
+    except oauth.OAuthError as error:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=error.code) from None
+
+
+@router.get("/me", summary="The signed-in account")
+async def me(session: CurrentSession) -> UserOut:
+    return _user_out(session.user)
 
 
 @router.patch("/me", summary="Change the signed-in account's own details (its alias)")

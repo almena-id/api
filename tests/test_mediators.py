@@ -1,7 +1,11 @@
+import json
+from typing import cast
+
 import pytest
 from httpx import AsyncClient
 
 from tests.conftest import Outbox
+from tests.signing import publish, ready, sign
 from tests.test_directory import _sign_in
 
 
@@ -91,22 +95,27 @@ async def test_renaming_and_moving_keep_the_did(client: AsyncClient, outbox: Out
 async def test_issuers_route_through_their_mediator(client: AsyncClient, outbox: Outbox) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
+    wallet = await ready(client, headers, tenant)
     mediator = await _mediator(client, headers, tenant)
+    identity = cast(dict[str, str], mediator["identity"])
+    await sign(client, headers, tenant, identity["id"], wallet)
     did = (await client.get(f"{base}/mediators/{mediator['id']}", headers=headers)).json()["did"]
 
     body = {"name": "Uni", "mediator_id": mediator["id"]}
     issuer = (await client.post(f"{base}/issuers", json=body, headers=headers)).json()
     assert issuer["mediator"] == {"id": mediator["id"], "name": "Relay"}
-    # Both published: a draft's DID does not resolve.
-    await client.post(f"{base}/mediators/{mediator['id']}/publish", headers=headers)
-    await client.post(f"{base}/issuers/{issuer['id']}/publish", headers=headers)
+    # Both signed and published: a draft's DID does not resolve.
+    await publish(client, headers, tenant, "mediators", str(mediator["id"]), wallet)
+    await sign(client, headers, tenant, issuer["identity"]["id"], wallet)
+    await publish(client, headers, tenant, "issuers", issuer["id"], wallet)
 
     slug = (
         (await client.get(f"{base}/identities/{issuer['identity']['id']}", headers=headers))
         .json()["did"]
         .rsplit(":", 1)[1]
     )
-    published = (await client.get(f"/ids/{slug}/did.json")).json()
+    log = (await client.get(f"/ids/{slug}/did.jsonl")).text.splitlines()
+    published = json.loads(log[-1])["state"]
     assert published["service"][0]["serviceEndpoint"]["uri"] == did
 
     # Without one, nothing to route through.

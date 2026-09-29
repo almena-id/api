@@ -4,6 +4,8 @@ import pytest
 from httpx import AsyncClient
 
 from tests.conftest import Outbox
+from tests.fake_wallet import FakeWallet
+from tests.signing import link_wallet, ready, sign
 from tests.test_directory import _sign_in
 
 
@@ -52,3 +54,48 @@ async def test_mediators_have_no_signing(client: AsyncClient, outbox: Outbox) ->
     mediator = (await client.post(f"{base}/mediators", json=body, headers=ada)).json()
     response = await client.get(f"{base}/mediators/{mediator['id']}/signing", headers=ada)
     assert response.status_code in (404, 422)
+
+
+async def test_the_signers_key_goes_in_the_document(client: AsyncClient, outbox: Outbox) -> None:
+    ada, tenant = await _sign_in(client, outbox, "ada@example.org")
+    base = f"/api/v1/tenants/{tenant}"
+    admin_wallet = await ready(client, ada, tenant)
+    await client.post(
+        f"{base}/invitations", json={"email": "bob@example.org", "role": "member"}, headers=ada
+    )
+    bob, _ = await _sign_in(client, outbox, "bob@example.org")
+    issuer = (await client.post(f"{base}/issuers", json={"name": "Uni"}, headers=ada)).json()
+    identity_url = f"{base}/identities/{issuer['identity']['id']}"
+    await sign(client, ada, tenant, issuer["identity"]["id"], admin_wallet)
+
+    # Bob signs for it, but has no wallet yet: no key to publish.
+    members = (await client.get(f"{base}/members", headers=ada)).json()
+    bob_id = next(m["user_id"] for m in members if m["email"] == "bob@example.org")
+    body = {"system": "single_user", "user_id": bob_id}
+    signing = await client.put(f"{base}/issuers/{issuer['id']}/signing", json=body, headers=ada)
+    assert signing.json()["signer"]["wallet"] is False
+    detail = (await client.get(identity_url, headers=ada)).json()
+    assert "assertionMethod" not in detail["document"]
+    assert detail["signature"] == "signed"
+
+    # He links one: the document should now name his key, and waits to be signed.
+    bob_wallet = FakeWallet()
+    await link_wallet(client, bob, bob_wallet)
+    detail = (await client.get(identity_url, headers=ada)).json()
+    assert detail["signature"] == "outdated"
+    did = detail["did"]
+    key = bob_wallet.did.removeprefix("did:key:")
+    assert detail["document"]["verificationMethod"] == [
+        {"id": f"{did}#{key}", "type": "Multikey", "controller": did, "publicKeyMultibase": key}
+    ]
+    assert detail["document"]["assertionMethod"] == [f"{did}#{key}"]
+    await sign(client, ada, tenant, issuer["identity"]["id"], admin_wallet)
+    assert (await client.get(identity_url, headers=ada)).json()["signature"] == "signed"
+
+    # The tenant's own identity is signed for by its admins' wallets.
+    own = (await client.get(base, headers=ada)).json()["identity"]["id"]
+    tenant_doc = (await client.get(f"{base}/identities/{own}", headers=ada)).json()["document"]
+    admin_key = admin_wallet.did.removeprefix("did:key:")
+    assert tenant_doc["assertionMethod"] == [f"{tenant_doc['id']}#{admin_key}"]
+    # Bob is a member, not an admin: his wallet signs nothing for the tenant.
+    assert all(key not in method for method in tenant_doc["assertionMethod"])

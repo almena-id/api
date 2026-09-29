@@ -3,24 +3,26 @@
 from fastapi import APIRouter
 
 from registry_api.api.routes import (
+    account,
     auth,
-    certification,
     directory,
+    domains,
     members,
     publication,
-    review,
     signing,
     tenants,
+    wallet,
 )
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+api_router.include_router(account.router)
+api_router.include_router(wallet.router)
+api_router.include_router(wallet.signing)
 api_router.include_router(tenants.router)
+api_router.include_router(domains.router)
 api_router.include_router(directory.router)
 api_router.include_router(members.router)
 api_router.include_router(publication.router)
 api_router.include_router(publication.catalog)
 api_router.include_router(signing.router)
-api_router.include_router(certification.router)
-api_router.include_router(certification.public)
-api_router.include_router(review.router)

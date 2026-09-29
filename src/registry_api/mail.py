@@ -44,6 +44,9 @@ _ROLE_NAMES: dict[Locale, dict[str, str]] = {
 
 _UNNAMED_TENANT: dict[Locale, str] = {"en": "a tenant", "es": "un tenant"}
 
+# An inviter whose account has neither alias nor email.
+_SOMEONE: dict[Locale, str] = {"en": "Someone", "es": "Alguien"}
+
 
 class Mailer:
     def __init__(self, settings: Settings) -> None:
@@ -71,14 +74,14 @@ class Mailer:
         to: str,
         *,
         tenant: str | None,
-        inviter: str,
+        inviter: str | None,
         role: str,
         locale: Locale,
     ) -> None:
         subject, body = _INVITATION_MAIL[locale]
         values = {
             "tenant": tenant or _UNNAMED_TENANT[locale],
-            "inviter": inviter,
+            "inviter": inviter or _SOMEONE[locale],
             "role": _ROLE_NAMES[locale].get(role, role),
             "url": f"{self.settings.portal_url.rstrip('/')}/login",
         }
