@@ -1,5 +1,9 @@
-from httpx import AsyncClient
+import uuid
 
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from registry_api.models import UserIdentity
 from tests.conftest import Outbox
 
 
@@ -138,3 +142,26 @@ async def test_outsiders_see_nothing(client: AsyncClient, outbox: Outbox) -> Non
         headers=eve,
     )
     assert response.status_code == 404
+
+
+async def test_the_list_says_who_has_a_wallet(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    ada = await _sign_in(client, outbox, "ada@example.org")
+    tenant = (await _tenants(client, ada))[0]["id"]
+    base = f"/api/v1/tenants/{tenant}"
+    invite = {"email": "bob@example.org", "role": "member"}
+    await client.post(f"{base}/invitations", json=invite, headers=ada)
+
+    listed = (await client.get(f"{base}/members", headers=ada)).json()
+    assert [(m["email"], m["wallet"]) for m in listed] == [
+        ("ada@example.org", False),
+        # Somebody invited has no account yet: nothing to say.
+        ("bob@example.org", None),
+    ]
+
+    ada_id = uuid.UUID((await client.get("/api/v1/auth/me", headers=ada)).json()["id"])
+    db.add(UserIdentity(user_id=ada_id, provider="almena", subject="did:key:z6Mk"))
+    await db.commit()
+    listed = (await client.get(f"{base}/members", headers=ada)).json()
+    assert listed[0]["wallet"] is True

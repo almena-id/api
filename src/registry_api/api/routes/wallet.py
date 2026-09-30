@@ -14,12 +14,13 @@
 The request's id travels in the QR code, so it is public: what holds a session
 is the poll secret, which only the portal that asked ever sees.
 
-**Signing.** A tenant admin signs one of the tenant's identities' did:webvh log
+**Signing.** Whoever signs as the tenant under its flow (``signing_flows``)
+signs one of the tenant's identities' did:webvh log
 entries the same way (``POST /tenants/{id}/identities/{id}/sign``): the
 request carries the entry (``purpose: "sign"``), the wallet answers with a Data
 Integrity proof by the key it keeps for this registry, and the registry writes
 the entry to the log only if that key is one of the update keys in force and
-the admin's own.
+the signer's own.
 """
 
 import json
@@ -34,7 +35,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import dids, wallet, webvh
+from registry_api import dids, signing_flows, wallet, webvh
 from registry_api.api.routes.account import LinkResult, settle_taken
 from registry_api.api.routes.auth import (
     CurrentSession,
@@ -45,6 +46,7 @@ from registry_api.api.routes.auth import (
     new_tenant,
     sign_in,
 )
+from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.members import admin_of
 from registry_api.config import get_settings
 from registry_api.mail import Locale
@@ -457,17 +459,18 @@ async def request_result(
 
 @signing.post(
     "/identities/{identity_id}/sign",
-    summary="Ask the admin's wallet to sign the identity's next log entry (admins only)",
+    summary="Ask the signer's wallet to sign the identity's next log entry "
+    "(whoever signs as the tenant under its flow)",
     responses={
-        status.HTTP_403_FORBIDDEN: {"description": "`not_admin`, `not_a_signer`"},
+        status.HTTP_403_FORBIDDEN: {"description": "`not_a_signer`"},
         status.HTTP_404_NOT_FOUND: {"description": "`identity_not_found`"},
         status.HTTP_409_CONFLICT: {
-            "description": "`up_to_date`: nothing to sign; `no_signers`: no admin has a wallet"
+            "description": "`up_to_date`: nothing to sign; `no_signers`: no signer has a wallet"
         },
     },
 )
 async def sign_identity(
-    tenant_id: AdminTenant,
+    tenant_id: TenantId,
     identity_id: uuid.UUID,
     body: LocaleIn,
     session: CurrentSession,
@@ -476,6 +479,8 @@ async def sign_identity(
     identity = await db.get(Identity, identity_id)
     if identity is None or identity.tenant_id != tenant_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="identity_not_found")
+    if not await signing_flows.signs(db, await db.get_one(Tenant, tenant_id), session.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
     try:
         entry = await dids.next_entry(db, get_settings().did_url, identity)
     except webvh.LogError as error:

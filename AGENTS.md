@@ -20,6 +20,7 @@ src/registry_api/
   dids.py            identities' did:webvh DIDs (`{did_url}/ids/{slug}`, almena.id): the document
                      each should publish, its signed log, the next entry to sign, its status
   credentials.py     a tenant's membership credential for its issuers, verifiers, mediators
+  signing_flows.py   the signing engine: who signs as a tenant, by its flow (`any_admin`, `single_user`)
   webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked, never made)
   wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token
   oauth.py           social sign-in providers (Google, Microsoft, Apple, GitHub):
@@ -33,9 +34,9 @@ src/registry_api/
                      and unlinked, and the move out of an empty account;
                      wallet.py: signing in or linking with an Almena wallet
                      (requests, the direct_post answer, the portal's poll), and
-                     admins signing an identity's next log entry (`purpose: sign`)
+                     the tenant's signers signing an identity's next log entry (`purpose: sign`)
                      directory.py: a tenant's issuers, verifiers, mediators, identities;
-                     publication.py: publishing them (admins) and the public catalogue;
+                     publication.py: publishing them (the tenant's signers; unpublishing, admins) and the public catalogue;
                      signing.py: an issuer's or verifier's signing system (admins set it)
                      (`member_tenant` guards them; keyset paging by cursor)
                      domains.py: the tenant's linked domains, proved by DNS TXT

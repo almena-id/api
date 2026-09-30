@@ -61,7 +61,7 @@ async def test_a_draft_is_seen_only_inside_its_tenant(
     assert (await client.get(f"/api/v1/catalog/{kind}")).json()["items"] == []
 
 
-async def test_only_admins_publish(client: AsyncClient, outbox: Outbox) -> None:
+async def test_only_the_flows_signers_publish(client: AsyncClient, outbox: Outbox) -> None:
     ada, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
     issuer = (await client.post(f"{base}/issuers", json={"name": "Uni"}, headers=ada)).json()
@@ -69,7 +69,7 @@ async def test_only_admins_publish(client: AsyncClient, outbox: Outbox) -> None:
     await client.post(f"{base}/invitations", json=invite, headers=ada)
     bob, _ = await _sign_in(client, outbox, "bob@example.org")
     denied = await client.post(f"{base}/issuers/{issuer['id']}/publish", json={}, headers=bob)
-    assert denied.status_code == 403 and denied.json()["detail"] == "not_admin"
+    assert denied.status_code == 403 and denied.json()["detail"] == "not_a_signer"
 
     # Nor in somebody else's tenant.
     eve, _ = await _sign_in(client, outbox, "eve@example.org")

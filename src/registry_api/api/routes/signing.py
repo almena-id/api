@@ -15,6 +15,7 @@ from typing import Annotated, Literal, cast
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api.api.routes.auth import DbSession
 from registry_api.api.routes.directory import TenantId
@@ -63,24 +64,30 @@ async def _owned(
     return item
 
 
+async def signer_out(
+    db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID | None
+) -> Signer | None:
+    """A signer as the portal shows them; the tenant's own too (`tenants.py`)."""
+    user = await db.get(User, user_id) if user_id is not None else None
+    if user is None:
+        return None
+    member = await db.get(TenantMember, (tenant_id, user.id))
+    wallet = await db.scalar(
+        select(UserIdentity.id)
+        .where(UserIdentity.user_id == user.id, UserIdentity.provider == "almena")
+        .limit(1)
+    )
+    return Signer(
+        id=user.id,
+        email=user.email,
+        alias=user.alias,
+        member=member is not None,
+        wallet=wallet is not None,
+    )
+
+
 async def _out(db: DbSession, item: Issuer | Verifier) -> SigningOut:
-    signer = None
-    if item.signer_id is not None:
-        user = await db.get(User, item.signer_id)
-        if user is not None:
-            member = await db.get(TenantMember, (item.tenant_id, user.id))
-            wallet = await db.scalar(
-                select(UserIdentity.id)
-                .where(UserIdentity.user_id == user.id, UserIdentity.provider == "almena")
-                .limit(1)
-            )
-            signer = Signer(
-                id=user.id,
-                email=user.email,
-                alias=user.alias,
-                member=member is not None,
-                wallet=wallet is not None,
-            )
+    signer = await signer_out(db, item.tenant_id, item.signer_id)
     return SigningOut(system=cast(System | None, item.signing), signer=signer)
 
 

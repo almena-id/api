@@ -85,3 +85,57 @@ async def test_only_admins_change_it(client: AsyncClient, outbox: Outbox) -> Non
 
     eve = await _sign_in(client, outbox, "eve@example.org")
     assert (await client.get(f"/api/v1/tenants/{tenant}", headers=eve)).status_code == 404
+
+
+async def test_a_tenant_starts_signed_by_any_one_admin(client: AsyncClient, outbox: Outbox) -> None:
+    ada = await _sign_in(client, outbox, "ada@example.org")
+    url = f"/api/v1/tenants/{await _tenant(client, ada)}"
+    assert (await client.get(url, headers=ada)).json()["signing_flow"] == "any_admin"
+
+    kept = await client.patch(url, json={"signing_flow": "any_admin"}, headers=ada)
+    assert kept.status_code == 200 and kept.json()["signing_flow"] == "any_admin"
+    # Other fields leave it alone, and so does `null`.
+    renamed = await client.patch(url, json={"name": "Acme", "signing_flow": None}, headers=ada)
+    assert renamed.json()["signing_flow"] == "any_admin"
+
+    unknown = await client.patch(url, json={"signing_flow": "everyone"}, headers=ada)
+    assert unknown.status_code == 422
+
+
+async def test_one_member_can_be_the_tenants_signer(client: AsyncClient, outbox: Outbox) -> None:
+    ada = await _sign_in(client, outbox, "ada@example.org")
+    tenant = await _tenant(client, ada)
+    url = f"/api/v1/tenants/{tenant}"
+    invite = {"email": "bob@example.org", "role": "member"}
+    await client.post(f"{url}/invitations", json=invite, headers=ada)
+    bob = await _sign_in(client, outbox, "bob@example.org")
+    bob_id = (await client.get("/api/v1/auth/me", headers=bob)).json()["id"]
+    eve = await _sign_in(client, outbox, "eve@example.org")
+    eve_id = (await client.get("/api/v1/auth/me", headers=eve)).json()["id"]
+
+    nobody = await client.patch(url, json={"signing_flow": "single_user"}, headers=ada)
+    assert nobody.status_code == 422 and nobody.json()["detail"] == "signer_required"
+    stranger = {"signing_flow": "single_user", "signer_id": eve_id}
+    outside = await client.patch(url, json=stranger, headers=ada)
+    assert outside.status_code == 422 and outside.json()["detail"] == "signer_not_member"
+
+    chosen = await client.patch(
+        url, json={"signing_flow": "single_user", "signer_id": bob_id}, headers=ada
+    )
+    assert chosen.status_code == 200, chosen.text
+    assert chosen.json()["signer"]["id"] == bob_id
+    # Bob signs, member as he is; Ada, admin, no longer does.
+    assert chosen.json()["signs"] is False
+    tenants = (await client.get("/api/v1/tenants", headers=bob)).json()
+    assert [t["signs"] for t in tenants if t["id"] == tenant] == [True]
+
+    identity = chosen.json()["identity"]["id"]
+    sign = f"{url}/identities/{identity}/sign"
+    denied = await client.post(sign, json={}, headers=ada)
+    assert denied.status_code == 403 and denied.json()["detail"] == "not_a_signer"
+    # Bob gets past who may sign; without a wallet there is no key to sign with.
+    no_wallet = await client.post(sign, json={}, headers=bob)
+    assert no_wallet.status_code == 409 and no_wallet.json()["detail"] == "no_signers"
+
+    back = await client.patch(url, json={"signing_flow": "any_admin"}, headers=ada)
+    assert back.json()["signer"] is None and back.json()["signs"] is True

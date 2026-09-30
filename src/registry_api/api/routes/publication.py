@@ -1,9 +1,10 @@
-"""What admins do to an issuer, verifier or mediator: publish, unpublish, delete.
+"""What is done to an issuer, verifier or mediator: publish (whoever signs as
+the tenant), unpublish and delete (admins).
 
 Publishing is what makes one visible outside its tenant.
 
 Each starts as a draft, seen only by the tenant's members. **Publishing is
-endorsing**: an admin signs from a wallet the tenant's membership credential
+endorsing**: whoever signs as the tenant signs from a wallet the tenant's membership credential
 for it and, in the same approval, its `whois.vp` (see `credentials` and
 `wallet.py`); once both are checked it is published — its DID resolves, the
 catalogue lists it. Unpublishing takes all of it back.
@@ -24,9 +25,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import and_, or_, select, update
 
-from registry_api import credentials, dids
+from registry_api import credentials, dids, signing_flows
 from registry_api.api.routes.auth import CurrentSession, DbSession
-from registry_api.api.routes.directory import ItemDetail, item_detail
+from registry_api.api.routes.directory import ItemDetail, TenantId, item_detail
 from registry_api.api.routes.members import admin_of
 from registry_api.api.routes.wallet import (
     LocaleIn,
@@ -75,10 +76,10 @@ async def _unpublish(db: DbSession, item: Publishable) -> ItemDetail:
 @router.post(
     "/{kind}/{item_id}/publish",
     summary="Publish an issuer, verifier or mediator by endorsing it: a request for the "
-    "admin's wallet to sign the tenant's membership credential and the item's whois.vp "
+    "signer's wallet to sign the tenant's membership credential and the item's whois.vp "
     "(publishing again renews it)",
     responses={
-        403: {"description": "`not_admin`; `not_a_signer`: no wallet of theirs signs for it"},
+        403: {"description": "`not_a_signer`: no wallet of theirs signs for it"},
         409: {
             "description": "`identity_pending`: its identity is not signed yet; "
             "`identity_outdated`: its published document does not name the admin's key yet; "
@@ -87,7 +88,7 @@ async def _unpublish(db: DbSession, item: Publishable) -> ItemDetail:
     },
 )
 async def publish(
-    tenant_id: AdminTenant,
+    tenant_id: TenantId,
     kind: Kind,
     item_id: uuid.UUID,
     body: LocaleIn,
@@ -97,6 +98,10 @@ async def publish(
     item = await _owned(db, kind, tenant_id, item_id)
     identity = await db.get_one(Identity, item.identity_id)
     tenant = await db.get_one(Tenant, tenant_id)
+    # Who the flow names, before anything about the item: a member it does
+    # not name is told so, whatever state the item is in.
+    if not await signing_flows.signs(db, tenant, session.user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
     owner = await db.get(Identity, tenant.identity_id) if tenant.identity_id else None
     # Nothing is published under a DID that does not exist yet.
     if identity.did is None:

@@ -13,7 +13,8 @@ An account may have other ways in besides its email, or none at all but those:
 ``account.py`` links and unlinks them.
 
 A session is an opaque bearer token; the portal keeps it in an HTTP-only
-cookie on its own origin and sends it as ``Authorization: Bearer``.
+cookie on its own origin and sends it as ``Authorization: Bearer``. It ends
+``session_ttl_hours`` after signing in, or after ``session_idle_minutes`` unused.
 Errors carry a stable code in ``detail`` for the portal to translate.
 """
 
@@ -131,6 +132,13 @@ def as_utc(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
+_SEEN_EVERY = timedelta(minutes=1)
+
+
+def _idle() -> timedelta:
+    return timedelta(minutes=get_settings().session_idle_minutes)
+
+
 async def current_session(
     db: DbSession,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
@@ -142,14 +150,20 @@ async def current_session(
     )
     if credentials is None:
         raise unauthorized
+    now = datetime.now(UTC)
     session = await db.scalar(
         select(Session).where(
             Session.token_hash == digest(credentials.credentials),
-            Session.expires_at > datetime.now(UTC),
+            Session.expires_at > now,
+            Session.last_seen_at > now - _idle(),
         )
     )
     if session is None:
         raise unauthorized
+    # Written at most once a minute: idle time is not worth a write per request.
+    if as_utc(session.last_seen_at) <= now - _SEEN_EVERY:
+        session.last_seen_at = now
+        await db.commit()
     return session
 
 
@@ -292,9 +306,16 @@ async def accept_invitations(db: AsyncSession, user: User) -> None:
 
 async def sign_in(db: AsyncSession, user: User) -> SignedIn:
     await accept_invitations(db, user)
+    now = datetime.now(UTC)
+    # Ended sessions are swept here, not by a job: signing in is frequent enough.
+    await db.execute(
+        delete(Session).where((Session.expires_at <= now) | (Session.last_seen_at <= now - _idle()))
+    )
     token = new_token()
-    expires_at = datetime.now(UTC) + timedelta(hours=get_settings().session_ttl_hours)
-    db.add(Session(user_id=user.id, token_hash=digest(token), expires_at=expires_at))
+    expires_at = now + timedelta(hours=get_settings().session_ttl_hours)
+    db.add(
+        Session(user_id=user.id, token_hash=digest(token), expires_at=expires_at, last_seen_at=now)
+    )
     await db.commit()
     return SignedIn(token=token, expires_at=expires_at, user=_user_out(user))
 

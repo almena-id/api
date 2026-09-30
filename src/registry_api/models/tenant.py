@@ -49,6 +49,15 @@ class Tenant(TimestampMixin, Base):
         ForeignKey("mediators.id", ondelete="SET NULL", use_alter=True),
         index=True,
     )
+    # Who signs as the tenant: one of `signing_flows.FLOWS`.
+    signing_flow: Mapped[str] = mapped_column(
+        String(32), default="any_admin", server_default="any_admin"
+    )
+    # `single_user`: the member who signs. Kept if they leave, signing nothing,
+    # until somebody else is chosen.
+    signer_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
 
 
 class TenantMember(TimestampMixin, Base):

@@ -1,9 +1,14 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from httpx import AsyncClient, Response
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api.config import get_settings
 from registry_api.mail import Locale, Mailer, get_mailer
 from registry_api.main import app
+from registry_api.models import Session
 from tests.conftest import Outbox
 
 
@@ -99,6 +104,54 @@ async def test_logout_ends_the_session(client: AsyncClient, outbox: Outbox) -> N
     headers = {"Authorization": f"Bearer {token}"}
     assert (await client.post("/api/v1/auth/logout", headers=headers)).status_code == 204
     assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 401
+
+
+async def _signed_in(client: AsyncClient, outbox: Outbox) -> dict[str, str]:
+    await _ask(client)
+    token = (await _verify(client, outbox.last_code())).json()["token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def _age(db: AsyncSession, **moved: timedelta) -> None:
+    """Moves every session's timestamps back by the given amounts."""
+    db.expire_all()  # read what the API wrote since
+    for session in await db.scalars(select(Session)):
+        for field, delta in moved.items():
+            setattr(session, field, getattr(session, field) - delta)
+    await db.commit()
+
+
+async def test_a_session_ends_when_left_idle(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    headers = await _signed_in(client, outbox)
+    idle = timedelta(minutes=get_settings().session_idle_minutes)
+    await _age(db, last_seen_at=idle - timedelta(minutes=1))
+    assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 200
+    # That request counted as use: the idle time starts again.
+    await _age(db, last_seen_at=idle - timedelta(minutes=1))
+    assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 200
+    await _age(db, last_seen_at=idle + timedelta(minutes=1))
+    assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 401
+
+
+async def test_a_session_ends_after_its_lifetime_however_used(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    headers = await _signed_in(client, outbox)
+    await _age(db, expires_at=timedelta(hours=get_settings().session_ttl_hours))
+    assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 401
+
+
+async def test_signing_in_sweeps_ended_sessions(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    await _signed_in(client, outbox)
+    await db.execute(update(Session).values(expires_at=datetime.now(UTC) - timedelta(minutes=1)))
+    await db.commit()
+    await _signed_in(client, outbox)
+    db.expire_all()
+    assert len(list(await db.scalars(select(Session)))) == 1
 
 
 async def test_the_alias_is_set_and_cleared(client: AsyncClient, outbox: Outbox) -> None:

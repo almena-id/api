@@ -41,8 +41,10 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_echo: bool = False
 
-    # How long a portal sign-in lasts before a new code is needed.
-    session_ttl_hours: int = Field(default=168, gt=0)
+    # A portal sign-in ends this long after it started, used or not…
+    session_ttl_hours: int = Field(default=12, gt=0)
+    # …or earlier, once no request has used it for this long.
+    session_idle_minutes: int = Field(default=30, gt=0)
     # Emailed sign-in codes: lifetime and wrong guesses allowed per code.
     login_code_ttl_minutes: int = Field(default=10, gt=0)
     login_code_max_attempts: int = Field(default=5, gt=0)
@@ -53,7 +55,7 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: SecretStr = SecretStr("")
     smtp_starttls: bool = False
-    mail_from: str = "Almena Registry <no-reply@almena.network>"
+    mail_from: str = "Almena Registry <no-reply@almena.id>"
 
     # Public origin of the portal: providers send the browser back to
     # `{portal_url}/auth/{provider}/callback`, which is what each one registers.

@@ -229,7 +229,7 @@ async def test_apple_signs_its_client_secret(
         serialization.NoEncryption(),
     ).decode()
     for name, value in {
-        "apple_client_id": "network.almena.registry",
+        "apple_client_id": "id.almena.registry",
         "apple_team_id": "TEAM123",
         "apple_key_id": "KEY123",
     }.items():
@@ -246,10 +246,10 @@ async def test_apple_signs_its_client_secret(
         claims = jwt.decode(
             secret, key.public_key(), algorithms=["ES256"], audience="https://appleid.apple.com"
         )
-        assert claims["iss"] == "TEAM123" and claims["sub"] == "network.almena.registry"
+        assert claims["iss"] == "TEAM123" and claims["sub"] == "id.almena.registry"
         token = _id_token(
             iss="https://appleid.apple.com",
-            aud="network.almena.registry",
+            aud="id.almena.registry",
             sub="a-1",
             email="ada@privaterelay.appleid.com",
             email_verified="true",

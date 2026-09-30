@@ -9,9 +9,10 @@ from the API's origin because the DID names it: it proxies ``/ids/`` and
 ``did:webvh:{SCID}:{host}``, at ``{did_url}/.well-known/did.jsonl``.
 
 **The registry never signs.** It works out the document an identity should
-publish (`desired`) and the update keys that may sign it — the tenant's admins'
-wallets — and prepares the log entry that would take the log there; a tenant
-admin signs it from a wallet, and only then is it published. Until its first
+publish (`desired`) and the update keys that may sign it — those the tenant's
+signing flow names (`signing_flows`) — and prepares the log entry that would
+take the log there; one of them signs it from a wallet, and only then is it
+published. Until its first
 entry is signed an identity is *pending* and has no DID; when what it should
 publish differs from what it last signed it is *outdated*.
 
@@ -25,7 +26,7 @@ it, as a `LinkedDomains` service.
 **Keys.** What an identity signs is checked against the keys its document
 lists under `assertionMethod`, each one embedded as a `Multikey` verification
 method (`{did}#{multikey}`) so a verifier needs to resolve nothing else: for a
-tenant's own identity, its admins' linked wallets (under `authentication` too,
+tenant's own identity, the keys its signing flow names (under `authentication` too,
 for the presentation that is its `whois.vp`; an issuer's, verifier's or
 mediator's `authentication` names those same keys as methods of the tenant's
 DID, its controller, which presents the tenant's endorsement of it) (the same keys that update
@@ -47,7 +48,7 @@ from urllib.parse import quote, urlsplit
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import webvh
+from registry_api import signing_flows, webvh
 from registry_api.models import (
     DidLogEntry,
     Identity,
@@ -133,7 +134,7 @@ def document(
         if authenticate:
             doc["authentication"] = [f"{did}#{key}" for key in keys]
     # A component's presentations are signed by its controller, the tenant:
-    # its admins' keys, as methods of the tenant's DID.
+    # the keys its signing flow names, as methods of the tenant's DID.
     if controller and controller_keys:
         doc["authentication"] = [f"{controller}#{key}" for key in controller_keys]
     service: list[dict[str, Any]] = []
@@ -249,17 +250,8 @@ async def desired(db: AsyncSession, did_url: str, identity: Identity) -> dict[st
 
 
 async def update_keys(db: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
-    """Who may sign the tenant's identities: its admins' linked wallets."""
-    subjects = await db.scalars(
-        select(UserIdentity.subject)
-        .join(TenantMember, TenantMember.user_id == UserIdentity.user_id)
-        .where(
-            TenantMember.tenant_id == tenant_id,
-            TenantMember.role == "admin",
-            UserIdentity.provider == "almena",
-        )
-    )
-    return sorted({webvh.multikey(subject) for subject in subjects})
+    """Who may sign the tenant's identities: what its signing flow says."""
+    return await signing_flows.signers(db, tenant_id)
 
 
 async def log(db: AsyncSession, identity_id: uuid.UUID) -> list[webvh.Entry]:

@@ -16,7 +16,7 @@ from sqlalchemy import select
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import TenantId
 from registry_api.mail import Locale, Mailer, get_mailer
-from registry_api.models import Role, Tenant, TenantInvitation, TenantMember, User
+from registry_api.models import Role, Tenant, TenantInvitation, TenantMember, User, UserIdentity
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["members"])
 
@@ -32,6 +32,9 @@ class MemberOut(BaseModel):
     role: Role
     # When they joined, or when they were invited.
     since: datetime
+    # Members only: whether their account has an Almena wallet linked, which
+    # everybody needs to work in the platform (signing starts there).
+    wallet: bool | None = None
 
 
 class InvitationIn(BaseModel):
@@ -50,8 +53,13 @@ async def admin_of(tenant_id: TenantId, session: CurrentSession, db: DbSession) 
 
 @router.get("/members", summary="The tenant's members, then those invited and not yet in")
 async def list_members(tenant_id: TenantId, db: DbSession) -> list[MemberOut]:
+    wallet = (
+        select(UserIdentity.id)
+        .where(UserIdentity.user_id == User.id, UserIdentity.provider == "almena")
+        .exists()
+    )
     members = await db.execute(
-        select(User.id, User.alias, User.email, TenantMember.role, TenantMember.created_at)
+        select(User.id, User.alias, User.email, TenantMember.role, TenantMember.created_at, wallet)
         .join(User, User.id == TenantMember.user_id)
         .where(TenantMember.tenant_id == tenant_id)
         .order_by(TenantMember.created_at, User.email)
@@ -63,9 +71,15 @@ async def list_members(tenant_id: TenantId, db: DbSession) -> list[MemberOut]:
     )
     return [
         MemberOut(
-            status="member", user_id=user_id, alias=alias, email=email, role=role, since=since
+            status="member",
+            user_id=user_id,
+            alias=alias,
+            email=email,
+            role=role,
+            since=since,
+            wallet=linked,
         )
-        for user_id, alias, email, role, since in members
+        for user_id, alias, email, role, since, linked in members
     ] + [
         MemberOut(status="invited", email=i.email, role=i.role, since=i.created_at) for i in invited
     ]
