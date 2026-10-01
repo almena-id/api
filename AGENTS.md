@@ -11,16 +11,21 @@ src/registry_api/
   main.py            FastAPI app factory: CORS, routers, lifespan, Scalar docs
   config.py          Settings (pydantic-settings, REGISTRY_* variables)
   db.py              async engine, sessionmaker and the `get_session` dependency
+  logs.py            log format (JSON or text), each request's context (request id, user,
+                     tenant: `set_user`, `set_tenant`), redaction and the access record
   security.py        sign-in codes and session tokens (both stored as SHA-256)
   mail.py            SMTP mailer (`get_mailer` dependency) and the email texts, en/es
   mediators.py       checking the address a mediator listens on (nothing is fetched)
   dns_proof.py       proving a domain with a DNS TXT record (`_almena.{domain}`)
   root.py            the root tenant (Almena): created once,
-                     its identity is the domain's DID (did:web:almena.id)
+                     its identity is the domain's DID (did:web:almena.id); its public
+                     mediator is every new tenant's default (`default_mediator`)
   dids.py            identities' did:webvh DIDs (`{did_url}/ids/{slug}`, almena.id): the document
                      each should publish, its signed log, the next entry to sign, its status
   credentials.py     a tenant's membership credential for its issuers, verifiers, mediators
   signing_flows.py   the signing engine: who signs as a tenant, by its flow (`any_admin`, `single_user`)
+  tenant_health.py   a tenant's health: the checks it must pass to operate (name, mediator,
+                     signing flow) and its score; new checks go here
   webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked, never made)
   wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token
   oauth.py           social sign-in providers (Google, Microsoft, Apple, GitHub):

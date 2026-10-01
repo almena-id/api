@@ -296,7 +296,7 @@ async def test_one_opens_and_changes(client: AsyncClient, outbox: Outbox, kind: 
     assert changed.status_code == 200, changed.text
     assert changed.json()["name"] == "Uni 2"
     assert changed.json()["description"] == "Degrees"
-    assert changed.json()["mediator"] == {"id": mediator["id"], "name": "Relay"}
+    assert changed.json()["mediator"] == {"id": mediator["id"], "name": "Relay", "own": True}
     # Its DID stays; its identity follows the name.
     assert changed.json()["did"] == detail["did"]
     assert changed.json()["identity"]["name"] == "Uni 2"

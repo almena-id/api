@@ -3,7 +3,8 @@
 Identities are the tenant's register of DIDs. The tenant and every issuer,
 verifier and mediator act as one of their own, created with them and named like
 them; each publishes its DID document (see `registry_api.dids`). Mediators are
-where messages arrive: issuers and verifiers pick one of the tenant's.
+where messages arrive: issuers and verifiers pick one of the tenant's, or a
+public one of another tenant's once published (`mediator-choices`).
 
 Everything lives under ``/tenants/{tenant_id}/…`` and is only reachable by the
 tenant's members. Lists are newest first and paged by an opaque cursor, so the
@@ -21,7 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import dids, mediators
+from registry_api import dids, logs, mediators
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.config import get_settings
 from registry_api.models import Identity, Issuer, Mediator, Tenant, TenantMember, Verifier
@@ -37,6 +38,7 @@ async def member_tenant(tenant_id: uuid.UUID, session: CurrentSession, db: DbSes
     if member is None:
         # Not "forbidden": whether somebody else's tenant exists is not ours to say.
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="tenant_not_found")
+    logs.set_tenant(tenant_id)
     return tenant_id
 
 
@@ -64,7 +66,8 @@ class NamedIn(BaseModel):
 
 class DescribedIn(NamedIn):
     description: str | None = Field(default=None, max_length=2000)
-    # One of the tenant's mediators, to receive messages through; optional.
+    # One of the tenant's mediators, or a published public one, to receive
+    # messages through; optional.
     mediator_id: uuid.UUID | None = None
 
     @field_validator("description")
@@ -76,6 +79,8 @@ class DescribedIn(NamedIn):
 class MediatorIn(NamedIn):
     # Where it listens: https (plain http only on loopback).
     url: str = Field(min_length=1, max_length=2048)
+    # Offered to every tenant (once published), not only this one.
+    public: bool = False
 
 
 class DescribedPatch(BaseModel):
@@ -90,6 +95,7 @@ class MediatorPatch(BaseModel):
     # Each field is changed only when sent.
     name: str | None = Field(default=None, max_length=200)
     url: str | None = Field(default=None, max_length=2048)
+    public: bool | None = None
 
 
 class IdentityRef(BaseModel):
@@ -100,6 +106,8 @@ class IdentityRef(BaseModel):
 class MediatorRef(BaseModel):
     id: uuid.UUID
     name: str
+    # Whether it is the tenant's own; otherwise another tenant's public one.
+    own: bool = True
 
 
 class Use(BaseModel):
@@ -118,8 +126,9 @@ class ItemOut(BaseModel):
     identity: IdentityRef | None = None
     # Issuers and verifiers: the mediator they receive messages through.
     mediator: MediatorRef | None = None
-    # Mediators: where they listen.
+    # Mediators: where they listen, and whether they are offered to every tenant.
     url: str | None = None
+    public: bool | None = None
     # Identities: the tenant, issuers and verifiers that act as them.
     used_by: list[Use] | None = None
     # Issuers, verifiers and mediators: when published; `null` while a draft.
@@ -203,7 +212,11 @@ def _out(item: Item, used_by: list[Use] | None = None) -> ItemOut:
     if isinstance(item, Issuer | Verifier | Mediator):
         identity = IdentityRef(id=item.identity.id, name=item.identity.name)
     if isinstance(item, Issuer | Verifier) and item.mediator is not None:
-        mediator = MediatorRef(id=item.mediator.id, name=item.mediator.name)
+        mediator = MediatorRef(
+            id=item.mediator.id,
+            name=item.mediator.name,
+            own=item.mediator.tenant_id == item.tenant_id,
+        )
     return ItemOut(
         id=item.id,
         name=item.name,
@@ -212,6 +225,7 @@ def _out(item: Item, used_by: list[Use] | None = None) -> ItemOut:
         identity=identity,
         mediator=mediator,
         url=item.url if isinstance(item, Mediator) else None,
+        public=item.public if isinstance(item, Mediator) else None,
         used_by=used_by,
         published_at=getattr(item, "published_at", None),
     )
@@ -301,14 +315,19 @@ async def _identity_for(db: DbSession, tenant_id: uuid.UUID, name: str) -> uuid.
     return identity.id
 
 
+def offered(mediator: Mediator) -> bool:
+    """Whether another tenant's mediator may be picked: public and published."""
+    return mediator.public and mediator.published_at is not None
+
+
 async def tenant_mediator(
     db: DbSession, tenant_id: uuid.UUID, mediator_id: uuid.UUID | None
 ) -> uuid.UUID | None:
-    """The mediator chosen, if it is one of the tenant's."""
+    """The mediator chosen, if it is one of the tenant's or a published public one."""
     if mediator_id is None:
         return None
     mediator = await db.get(Mediator, mediator_id)
-    if mediator is None or mediator.tenant_id != tenant_id:
+    if mediator is None or not (mediator.tenant_id == tenant_id or offered(mediator)):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="mediator_not_found")
     return mediator.id
 
@@ -331,7 +350,7 @@ async def list_issuers(
     "/issuers",
     status_code=status.HTTP_201_CREATED,
     summary="Register an issuer",
-    responses={422: {"description": "`mediator_not_found`: not one of the tenant's"}},
+    responses={422: {"description": "`mediator_not_found`: neither the tenant's nor a public one"}},
 )
 async def create_issuer(tenant_id: TenantId, body: DescribedIn, db: DbSession) -> ItemOut:
     mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
@@ -359,7 +378,7 @@ async def list_verifiers(
     "/verifiers",
     status_code=status.HTTP_201_CREATED,
     summary="Register a verifier",
-    responses={422: {"description": "`mediator_not_found`: not one of the tenant's"}},
+    responses={422: {"description": "`mediator_not_found`: neither the tenant's nor a public one"}},
 )
 async def create_verifier(tenant_id: TenantId, body: DescribedIn, db: DbSession) -> ItemOut:
     mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
@@ -471,7 +490,14 @@ async def create_mediator(tenant_id: TenantId, body: MediatorIn, db: DbSession) 
     url = _endpoint(body.url)
     identity_id = await _identity_for(db, tenant_id, body.name)
     return await _create(
-        db, Mediator(tenant_id=tenant_id, name=body.name, url=url, identity_id=identity_id)
+        db,
+        Mediator(
+            tenant_id=tenant_id,
+            name=body.name,
+            url=url,
+            public=body.public,
+            identity_id=identity_id,
+        ),
     )
 
 
@@ -489,7 +515,7 @@ async def get_mediator(tenant_id: TenantId, mediator_id: uuid.UUID, db: DbSessio
 
 @router.patch(
     "/mediators/{mediator_id}",
-    summary="Change a mediator's name or address (its DID stays)",
+    summary="Change a mediator's name, address or whether it is public (its DID stays)",
     responses={422: {"description": "`name_required`, `mediator_invalid`, `mediator_insecure`"}},
 )
 async def update_mediator(
@@ -499,11 +525,57 @@ async def update_mediator(
     sent = body.model_fields_set
     if "url" in sent:
         mediator.url = _endpoint(body.url or "")
+    # Tenants that picked it while public keep it: it is only no longer offered.
+    if body.public is not None:
+        mediator.public = body.public
     if "name" in sent:
         _rename(mediator, body.name)
     await db.commit()
     await db.refresh(mediator, ["identity"])
     return await item_detail(db, mediator)
+
+
+class MediatorChoice(BaseModel):
+    id: uuid.UUID
+    name: str
+    url: str
+    # The tenant's own (drafts included), or another tenant's public one.
+    own: bool
+    published: bool
+
+
+@router.get(
+    "/mediator-choices",
+    summary="The mediators the tenant may pick: its own, then the published public ones",
+)
+async def mediator_choices(tenant_id: TenantId, db: DbSession) -> list[MediatorChoice]:
+    # A hundred of each is more than a tenant is expected to choose from.
+    own = await db.scalars(
+        select(Mediator)
+        .where(Mediator.tenant_id == tenant_id)
+        .order_by(Mediator.created_at, Mediator.id)
+        .limit(100)
+    )
+    public = await db.scalars(
+        select(Mediator)
+        .where(
+            Mediator.tenant_id != tenant_id,
+            Mediator.public,
+            Mediator.published_at.is_not(None),
+        )
+        .order_by(Mediator.name, Mediator.id)
+        .limit(100)
+    )
+    return [
+        MediatorChoice(
+            id=m.id,
+            name=m.name,
+            url=m.url,
+            own=m.tenant_id == tenant_id,
+            published=m.published_at is not None,
+        )
+        for m in [*own, *public]
+    ]
 
 
 @router.get("/identities", summary="The tenant's identities, newest first")

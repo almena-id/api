@@ -32,7 +32,7 @@ async def test_the_tenant_picks_one_of_its_mediators(client: AsyncClient, outbox
 
     picked = await client.patch(url, json={"mediator_id": mediator["id"]}, headers=ada)
     assert picked.status_code == 200, picked.text
-    assert picked.json()["mediator"] == {"id": mediator["id"], "name": "Relay"}
+    assert picked.json()["mediator"] == {"id": mediator["id"], "name": "Relay", "own": True}
 
     # The name is left alone when not sent; `null` removes the mediator.
     cleared = await client.patch(url, json={"mediator_id": None}, headers=ada)

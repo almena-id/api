@@ -13,6 +13,8 @@ services:
     environment:
       REGISTRY_ENVIRONMENT: ${REGISTRY_ENVIRONMENT:-production}
       REGISTRY_LOG_LEVEL: ${REGISTRY_LOG_LEVEL:-INFO}
+      # Always JSON in the container, whatever .env says for task dev.
+      REGISTRY_LOG_FORMAT: json
       REGISTRY_PUBLIC_URL: ${REGISTRY_PUBLIC_URL:-https://api.almena.id}
       REGISTRY_DID_URL: ${REGISTRY_DID_URL:-https://almena.id}
       REGISTRY_CORS_ORIGINS: ${REGISTRY_CORS_ORIGINS:-["https://registry.almena.id"]}
@@ -97,5 +99,27 @@ services:
       - "127.0.0.1:${REGISTRY_SMTP_PORT:-1025}:1025"
       - "127.0.0.1:${REGISTRY_MAILPIT_UI_PORT:-8025}:8025"
 
+  openobserve:
+    # Indexes the logs: its UI and ingestion API at http://localhost:5080,
+    # signing in as REGISTRY_OPENOBSERVE_ADMIN. The image has no shell, so no
+    # healthcheck: GET /healthz answers once it is up.
+    image: public.ecr.aws/zinclabs/openobserve:v1.0.4
+    restart: unless-stopped
+    environment:
+      ZO_ROOT_USER_EMAIL: ${REGISTRY_OPENOBSERVE_ADMIN:-admin@almena.id}
+      # 8-128 characters with a lowercase and an uppercase letter, a digit and
+      # a symbol, or it refuses to start.
+      ZO_ROOT_USER_PASSWORD: ${REGISTRY_OPENOBSERVE_PASSWORD:?set REGISTRY_OPENOBSERVE_PASSWORD in .env (task init)}
+      ZO_DATA_DIR: /data
+      # Entries older than this are deleted (whole files, by the compactor, so
+      # some hours late at most).
+      ZO_COMPACT_DATA_RETENTION_DAYS: ${REGISTRY_OPENOBSERVE_RETENTION_DAYS:-30}
+      ZO_TELEMETRY: "false"
+    ports:
+      - "127.0.0.1:${REGISTRY_OPENOBSERVE_PORT:-5080}:5080"
+    volumes:
+      - openobserve-data:/data
+
 volumes:
   postgres-data:
+  openobserve-data:

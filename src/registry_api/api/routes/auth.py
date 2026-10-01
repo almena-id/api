@@ -34,7 +34,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import oauth
+from registry_api import logs, oauth
 from registry_api.config import get_settings
 from registry_api.db import get_session
 from registry_api.mail import Locale, Mailer, get_mailer
@@ -49,6 +49,7 @@ from registry_api.models import (
     User,
     UserIdentity,
 )
+from registry_api.root import default_mediator
 from registry_api.security import digest, new_code, new_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -160,6 +161,7 @@ async def current_session(
     )
     if session is None:
         raise unauthorized
+    logs.set_user(session.user_id)
     # Written at most once a minute: idle time is not worth a write per request.
     if as_utc(session.last_seen_at) <= now - _SEEN_EVERY:
         session.last_seen_at = now
@@ -245,8 +247,10 @@ async def check_code(db: AsyncSession, email: str, code: str) -> None:
 async def new_tenant(
     db: AsyncSession, name: str | None, identity_name: str | None = None
 ) -> Tenant:
-    """A tenant, with its own identity named like it (or `identity_name`, unnamed)."""
-    tenant = Tenant(name=name)
+    """A tenant, with its own identity named like it (or `identity_name`,
+    unnamed), receiving messages through the default mediator (the root's)."""
+    mediator = await default_mediator(db)
+    tenant = Tenant(name=name, mediator_id=mediator.id if mediator else None)
     db.add(tenant)
     await db.flush()
     identity = Identity(

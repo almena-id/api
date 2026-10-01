@@ -1,4 +1,4 @@
-"""Tenants the signed-in user belongs to, and a tenant's own details."""
+"""Tenants the signed-in user belongs to, a tenant's own details and its health."""
 
 import uuid
 from datetime import datetime
@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from registry_api import tenant_health
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import IdentityRef, MediatorRef, TenantId, tenant_mediator
 from registry_api.api.routes.members import admin_of
@@ -31,7 +32,7 @@ class TenantOut(BaseModel):
 
 class TenantDetail(TenantOut):
     # The organisation's own identity, and the mediator it receives messages
-    # through (one of the tenant's; `null` until chosen).
+    # through (one of the tenant's or a public one; `null` until chosen).
     identity: IdentityRef | None
     mediator: MediatorRef | None
     # Who signs as the tenant (`signing_flows`); `single_user`: who.
@@ -58,7 +59,11 @@ async def _detail(db: DbSession, tenant: Tenant, role: str, user_id: uuid.UUID) 
         role=role,
         signs=await signs(db, tenant, user_id),
         identity=IdentityRef(id=identity.id, name=identity.name) if identity else None,
-        mediator=MediatorRef(id=mediator.id, name=mediator.name) if mediator else None,
+        mediator=MediatorRef(
+            id=mediator.id, name=mediator.name, own=mediator.tenant_id == tenant.id
+        )
+        if mediator
+        else None,
         signing_flow=cast(Flow, tenant.signing_flow),
         signer=await signer_out(db, tenant.id, tenant.signer_id),
     )
@@ -96,7 +101,8 @@ async def get_tenant(tenant_id: TenantId, session: CurrentSession, db: DbSession
     responses={
         status.HTTP_403_FORBIDDEN: {"description": "`not_admin`"},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": "`name_required`, `mediator_not_found` (not one of the tenant's), "
+            "description": "`name_required`, `mediator_not_found` (neither the tenant's nor a "
+            "public one), "
             "`signer_required` (`single_user` with nobody), `signer_not_member`"
         },
     },
@@ -136,3 +142,26 @@ async def update_tenant(
     await db.commit()
     await db.refresh(tenant)
     return await _detail(db, tenant, "admin", session.user_id)
+
+
+class HealthCheck(BaseModel):
+    check: tenant_health.Check
+    done: bool
+    # What is missing, when not done: `missing` (name, mediator), `unpublished`
+    # (mediator), `no_signer` or `no_wallet` (signing flow).
+    issue: tenant_health.Issue | None
+
+
+class TenantHealth(BaseModel):
+    # The share of checks done, 0 to 100.
+    score: int
+    checks: list[HealthCheck]
+
+
+@router.get("/{tenant_id}/health", summary="What the tenant still needs set up to operate")
+async def get_health(tenant_id: TenantId, db: DbSession) -> TenantHealth:
+    results = await tenant_health.checks(db, await db.get_one(Tenant, tenant_id))
+    return TenantHealth(
+        score=tenant_health.score(results),
+        checks=[HealthCheck(check=r.check, done=r.issue is None, issue=r.issue) for r in results],
+    )

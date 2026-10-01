@@ -12,6 +12,7 @@ from registry_api.api.router import api_router
 from registry_api.api.routes import did_documents, health, well_known
 from registry_api.config import get_settings
 from registry_api.db import get_engine
+from registry_api.logs import REQUEST_ID_HEADER, RequestContextMiddleware, configure_logging
 
 
 @asynccontextmanager
@@ -22,6 +23,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format)
     app = FastAPI(
         title="Almena Registry API",
         version=__version__,
@@ -41,7 +43,10 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[REQUEST_ID_HEADER],
     )
+    # Outermost, so every request, preflights and errors included, gets its id.
+    app.add_middleware(RequestContextMiddleware)
     if settings.docs_enabled:
         add_scalar_reference(app, route="/docs")
     app.include_router(health.router)

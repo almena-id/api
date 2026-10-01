@@ -32,7 +32,8 @@ class Issuer(SigningMixin, PublishedMixin, TimestampMixin, Base):
         Uuid, ForeignKey("identities.id", ondelete="RESTRICT"), index=True, unique=True
     )
 
-    # The tenant's mediator it receives messages through; none until chosen.
+    # The mediator it receives messages through (the tenant's, or a public
+    # one); none until chosen.
     mediator_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("mediators.id", ondelete="SET NULL"), index=True
     )

@@ -103,7 +103,7 @@ async def test_issuers_route_through_their_mediator(client: AsyncClient, outbox:
 
     body = {"name": "Uni", "mediator_id": mediator["id"]}
     issuer = (await client.post(f"{base}/issuers", json=body, headers=headers)).json()
-    assert issuer["mediator"] == {"id": mediator["id"], "name": "Relay"}
+    assert issuer["mediator"] == {"id": mediator["id"], "name": "Relay", "own": True}
     # Both signed and published: a draft's DID does not resolve.
     await publish(client, headers, tenant, "mediators", str(mediator["id"]), wallet)
     await sign(client, headers, tenant, issuer["identity"]["id"], wallet)

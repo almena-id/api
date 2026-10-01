@@ -25,6 +25,8 @@ def serve() -> None:
         proxy_headers=True,
         forwarded_allow_ips=settings.forwarded_allow_ips,
         log_level=settings.log_level.lower(),
+        # Replaced by registry_api.logs' own, which has the request's context.
+        access_log=False,
     )
 
 

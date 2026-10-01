@@ -9,12 +9,14 @@ Built with Python 3.13, [uv](https://docs.astral.sh/uv/), SQLAlchemy 2 (async, a
 Needs [uv](https://docs.astral.sh/uv/), [Task](https://taskfile.dev) and Docker.
 
 ```bash
-task init   # .env from .env.example, with a random database password
+task init   # .env from .env.example, with random database and OpenObserve passwords
 task up     # PostgreSQL + migrations + API in Docker
 task health # {"status":"ok","version":"0.1.0","database":"ok"}
 ```
 
 There are no passwords: signing up and signing in are the same flow, an email with a six-digit code. In development every email lands in [Mailpit](https://mailpit.axllent.org) at `http://localhost:8025` (`task up` starts it, `task dev` too).
+
+Logs are indexed in [OpenObserve](https://openobserve.ai) at `http://localhost:5080` (`task up` starts it, `task dev` too), signing in as `REGISTRY_OPENOBSERVE_ADMIN` with `REGISTRY_OPENOBSERVE_PASSWORD`; entries older than `REGISTRY_OPENOBSERVE_RETENTION_DAYS` (30) are deleted.
 
 The API is published at `https://api.almena.id`, for the portal at `https://registry.almena.id`; locally it answers at `http://localhost:8000`. For development, `task dev` runs it locally with auto-reload against PostgreSQL in Docker, and serves the interactive [Scalar](https://scalar.com) reference at `http://localhost:8000/docs`.
 
@@ -26,7 +28,7 @@ Almena is the root: the tenant that governs the network. It is an ordinary tenan
 task root -- --admin you@almena.id
 ```
 
-(`registry-api init-root --admin <email> [--name Almena] [--mediator-url https://mediator.almena.id]` in a container.) A second run fails. It comes with one mediator, `Almena Mediator`, at `https://mediator.almena.id` (or `--mediator-url`), a draft until an admin publishes it. Its identity is the identity domain's own DID (`did:webvh:{SCID}:almena.id`, also served as `did:web:almena.id`), at `/.well-known/`. The server holds no key for it: keys arrive when its admins sign from their wallets.
+(`registry-api init-root --admin <email> [--name Almena] [--mediator-url https://mediator.almena.id]` in a container.) A second run fails. It comes with one mediator, `Almena Mediator`, at `https://mediator.almena.id` (or `--mediator-url`), public, and a draft until an admin publishes it; once published, every new tenant starts with it as its mediator. Its identity is the identity domain's own DID (`did:webvh:{SCID}:almena.id`, also served as `did:web:almena.id`), at `/.well-known/`. The server holds no key for it: keys arrive when its admins sign from their wallets.
 
 ## Configuration
 
@@ -52,6 +54,9 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 | `REGISTRY_GITHUB_CLIENT_ID` / `REGISTRY_GITHUB_CLIENT_SECRET` | — | Sign in with GitHub (off while empty) |
 | `REGISTRY_APPLE_CLIENT_ID` / `REGISTRY_APPLE_TEAM_ID` / `REGISTRY_APPLE_KEY_ID` / `REGISTRY_APPLE_PRIVATE_KEY` | — | Sign in with Apple: Services ID, team, key id and the `.p8` key (PEM) (off while empty) |
 | `REGISTRY_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
+| `REGISTRY_LOG_FORMAT` | `json` | `json`, one object per line (Compose always uses it), or `text` for a terminal (`task dev`'s); see [Logs](#logs) |
+| `REGISTRY_OPENOBSERVE_PORT` / `REGISTRY_OPENOBSERVE_ADMIN` / `REGISTRY_OPENOBSERVE_PASSWORD` | `5080` / `admin@almena.id` / — | OpenObserve (Compose): port published on the host, and its admin; the password needs a lowercase and an uppercase letter, a digit and a symbol (`task init` makes one) |
+| `REGISTRY_OPENOBSERVE_RETENTION_DAYS` | `30` | Days before OpenObserve deletes log entries |
 
 ## Endpoints
 
@@ -84,13 +89,15 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 | `GET /ids/{slug}/whois.vp` | The did:webvh `#whois` (`application/vp`): a published issuer's, verifier's or mediator's endorsement by its tenant; `404` otherwise |
 | `GET /.well-known/did.jsonl` | The root tenant's log (`did:webvh:{SCID}:almena.id`); `did.json` beside it is `did:web:almena.id` |
 | `GET /api/v1/tenants` | The signed-in user's tenants, oldest first, with the user's `role` in each and whether they `signs` as it under its flow (`name` is `null` until one is given) |
-| `GET /api/v1/tenants/{id}` | A tenant's details: `name`, the user's `role`, its own `identity` (created with it, named like it, renamed with it), the `mediator` its identity receives messages through (one of its mediators, or `null`), its `signing_flow`: who signs as the tenant — its identities' log entries and its endorsements (`any_admin`: any one admin with a linked wallet, alone; `single_user`: the member named in `signer`, admin or not, alone), `signer` (`null` unless `single_user`) and whether the user `signs` |
-| `PATCH /api/v1/tenants/{id}` | Change `name`, `mediator_id`, `signing_flow` and/or `signer_id` (admins only; `null` removes the mediator, and leaves the flow as it is; a flow other than `single_user` drops the signer); `422` with `name_required`, `mediator_not_found`, `signer_required` or `signer_not_member` |
+| `GET /api/v1/tenants/{id}` | A tenant's details: `name`, the user's `role`, its own `identity` (created with it, named like it, renamed with it), the `mediator` its identity receives messages through (`{id, name, own}`: one of its mediators, or another tenant's public one when `own` is `false`; `null` when none; new tenants start with the root's once it is published), its `signing_flow`: who signs as the tenant — its identities' log entries and its endorsements (`any_admin`: any one admin with a linked wallet, alone; `single_user`: the member named in `signer`, admin or not, alone), `signer` (`null` unless `single_user`) and whether the user `signs` |
+| `PATCH /api/v1/tenants/{id}` | Change `name`, `mediator_id`, `signing_flow` and/or `signer_id` (admins only; `null` removes the mediator, and leaves the flow as it is; a flow other than `single_user` drops the signer); `422` with `name_required`, `mediator_not_found` (neither the tenant's nor a published public one), `signer_required` or `signer_not_member` |
+| `GET /api/v1/tenants/{id}/health` | Any member: what the tenant still needs set up to operate. `score` (0 to 100, the share of checks done) and `checks`, in order, each `{check, done, issue}`: `name` (`missing`), `mediator` (`missing`, or `unpublished`: its DID does not resolve yet), `signing_flow` (`no_signer`: `single_user` names nobody who still belongs; `no_wallet`: nobody who signs under the flow has a wallet linked) |
+| `GET /api/v1/tenants/{id}/mediator-choices` | The mediators the tenant, its issuers and verifiers may pick: its own (drafts too, oldest first), then other tenants' public and published ones (by name); each `{id, name, url, own, published}` |
 | `GET /api/v1/tenants/{id}/issuers` (and `/verifiers`, `/mediators`, `/identities`) | The tenant's items, newest first: `{items, next_cursor, total}`, each with its DID's `signature` (`pending`, `signed`, `outdated`); `limit` (1–100, 20) and `cursor` from the previous page; `404 tenant_not_found` for a tenant the user is not in |
-| `POST /api/v1/tenants/{id}/issuers` (and `/verifiers`) | Register one: `name` (1–200), optional `description` and optional `mediator_id` (one of the tenant's mediators, `422 mediator_not_found` otherwise). Each gets an identity of its own, named like it, and comes back with it (`identity`) and its `mediator` |
-| `POST /api/v1/tenants/{id}/mediators` | Register a mediator: `name` and the `url` it listens on (`https`; plain `http` only on loopback; `https://` is added when no scheme is typed). Nothing is fetched from it: the registry gives it an identity of its own, whose DID document publishes that address; `422 mediator_invalid` or `mediator_insecure` |
+| `POST /api/v1/tenants/{id}/issuers` (and `/verifiers`) | Register one: `name` (1–200), optional `description` and optional `mediator_id` (one of the tenant's mediators or a published public one, `422 mediator_not_found` otherwise). Each gets an identity of its own, named like it, and comes back with it (`identity`) and its `mediator` |
+| `POST /api/v1/tenants/{id}/mediators` | Register a mediator: `name`, whether it is `public` (offered to every tenant once published; `false` by default) and the `url` it listens on (`https`; plain `http` only on loopback; `https://` is added when no scheme is typed). Nothing is fetched from it: the registry gives it an identity of its own, whose DID document publishes that address; `422 mediator_invalid` or `mediator_insecure` |
 | `GET /api/v1/tenants/{id}/mediators/{mediator_id}` | One mediator, with its `did`; `404 mediator_not_found` |
-| `PATCH /api/v1/tenants/{id}/mediators/{mediator_id}` | Change its `name` (its identity is renamed with it) and/or `url`; its DID stays; `422` with `name_required`, `mediator_invalid` or `mediator_insecure` |
+| `PATCH /api/v1/tenants/{id}/mediators/{mediator_id}` | Change its `name` (its identity is renamed with it), `url` and/or `public` (made private, it is no longer offered; tenants that picked it keep it); its DID stays; `422` with `name_required`, `mediator_invalid` or `mediator_insecure` |
 | `GET /api/v1/tenants/{id}/issuers/{issuer_id}`, `…/verifiers/{verifier_id}` | One issuer or verifier, with its `did`, its DID `document` and `document_url` (where it resolves once published); `404 issuer_not_found` / `verifier_not_found` |
 | `PATCH /api/v1/tenants/{id}/issuers/{issuer_id}`, `…/verifiers/{verifier_id}` | Change its `name`, `description` and/or `mediator_id` (`null` removes the last two); its DID stays; `422` with `name_required` or `mediator_not_found` |
 | `POST /api/v1/tenants/{id}/{issuers\|verifiers\|mediators}/{item_id}/publish` | Whoever signs as the tenant under its flow (`403 not_a_signer` otherwise): publish it by **endorsing** it — a wallet request (`kind` `endorsement`) carrying the tenant's membership credential for it (`AlmenaMembership`, issued by the tenant's DID, valid a year) and its `whois.vp` template; the wallet signs both in one approval (the presentation as the item's controller, with a key the item's published document names under `authentication`); then it is published and its `whois.vp` served. Publishing again renews it. Drafts' DIDs do not resolve, the catalogue does not list them, no document routes through a draft mediator; `403 not_a_signer`, `409 identity_pending`/`identity_outdated`/`tenant_pending` |
@@ -124,6 +131,20 @@ The wallet (`../wallet`, `registry.rs`) signs with a key it derives for the port
 Google, Microsoft, Apple and GitHub run the authorization code flow with PKCE and `state` (and a `nonce` for the OpenID Connect ones). Each is off until its variables are set. Register this redirect URI with each provider, with the portal's origin: `https://registry.almena.id/auth/{google|microsoft|apple|github}/callback` (for development, `http://localhost:3000/…`; Apple accepts only HTTPS).
 
 An account is its email, however it signs in. A provider's account joins or creates the account for its email only when the provider vouches for the address: Google's and Apple's `email_verified`, GitHub's primary verified email, and for Microsoft a personal account or a work account whose ID token carries the optional claim `xms_edov` (add it in the app registration's *Token configuration*).
+
+## Logs
+
+The API writes one line per record on stdout: JSON (`REGISTRY_LOG_FORMAT=json`, what the container always uses) or text for a terminal (`task dev`'s). Every record made while a request is served carries its context, so any query can be narrowed to one request, user or tenant:
+
+| Field | |
+|---|---|
+| `timestamp`, `level`, `logger`, `message` | Always |
+| `request_id` | The request's id: the caller's `X-Request-ID` when it is one (up to 64 letters, digits, `.`, `_`, `-`), a new one otherwise; every response carries it back in `X-Request-ID` |
+| `user_id` | The signed-in user, once the bearer token holds |
+| `tenant_id` | The tenant the request acts on, once membership is checked (`/api/v1/tenants/{id}/…`) |
+| `exception` | The traceback, for an error |
+
+Each request leaves an access record (logger `registry_api.access`) with `method`, `path` (never the query string), `route` (the path template), `status` and `duration_ms`; an unhandled error turns it into an `ERROR` with the traceback. Successful health checks leave none. Only ids are logged: no email, name or IP address, and extra fields named like a secret or personal data (`email`, `code`, `token`, `password`, `authorization`, `nonce`, `state`, `proof`, `poll`, `ticket`, `*_key`, `*_secret`…) are written as `[redacted]`.
 
 ## Database migrations
 

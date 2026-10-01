@@ -42,8 +42,9 @@ class Tenant(TimestampMixin, Base):
     # The root authority: Almena, created once at install (`registry-api
     # init-root`). Its identity is the identity domain's own DID.
     root: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    # One of its mediators, which the tenant's own identity receives messages
-    # through; none until chosen. Its issuers and verifiers each pick their own.
+    # The mediator the tenant's own identity receives messages through: one of
+    # its own or a public one (a new tenant starts with the root's). Its
+    # issuers and verifiers each pick their own.
     mediator_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid,
         ForeignKey("mediators.id", ondelete="SET NULL", use_alter=True),

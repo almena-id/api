@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # One JSON object per line (containers, OpenObserve) or text for a terminal.
+    log_format: Literal["json", "text"] = "json"
     # Proxies whose X-Forwarded-* headers are trusted (comma-separated IPs or "*").
     forwarded_allow_ips: str = "127.0.0.1"
 

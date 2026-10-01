@@ -8,8 +8,9 @@ one wallets trust; the keys in its document arrive when its admins sign from
 their wallets.
 
 It is created with one mediator, ``Almena Mediator``
-(``https://mediator.almena.id`` unless told otherwise), a draft like any other
-until an admin publishes it.
+(``https://mediator.almena.id`` unless told otherwise), public, and a draft
+like any other until an admin publishes it. Once published it is the mediator
+every new tenant starts with (`default_mediator`).
 """
 
 from datetime import UTC, datetime
@@ -31,6 +32,18 @@ class RootExists(Exception):
 
 async def root_tenant(db: AsyncSession) -> Tenant | None:
     return await db.scalar(select(Tenant).where(Tenant.root))
+
+
+async def default_mediator(db: AsyncSession) -> Mediator | None:
+    """The mediator a new tenant starts with: the root's public one, once
+    published (the oldest, should it have several); none before."""
+    return await db.scalar(
+        select(Mediator)
+        .join(Tenant, Tenant.id == Mediator.tenant_id)
+        .where(Tenant.root, Mediator.public, Mediator.published_at.is_not(None))
+        .order_by(Mediator.created_at, Mediator.id)
+        .limit(1)
+    )
 
 
 async def create_root(
@@ -57,6 +70,7 @@ async def create_root(
         name=ROOT_MEDIATOR,
         url=url,
         identity_id=relay.id,
+        public=True,
         created_at=now,
     )
     db.add(mediator)
