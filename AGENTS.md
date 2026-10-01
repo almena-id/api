@@ -24,6 +24,26 @@ src/registry_api/
                      each should publish, its signed log, the next entry to sign, its status
   credentials.py     a tenant's membership credential for its issuers, verifiers, mediators
   signing_flows.py   the signing engine: who signs as a tenant, by its flow (`any_admin`, `single_user`)
+  credential_catalog.py  Almena's credential types: claims named as catalogue fields, how each
+                     format names them (vct, W3C type, mdoc doctype), their claims' JSON
+                     Schema and SD-JWT VC Type Metadata (`/.well-known/vct/…`); `external`
+                     ones (EU PID) are only asked for
+  form_credentials.py  a form's `credentials` block: credential types asked to be
+                     presented, their claims, whom they are trusted from, the fields they
+                     fill, and the OpenID4VP DCQL query they make
+  texts.py           texts by language (`{"en": …, "es": …}`): a form's name, description,
+                     help and purposes; `clean` checks them, `text_of` picks one
+  answers.py         checking a holder's typed answers against the form's fields
+  issuance.py        issuing an accepted application's credential: the SD-JWT VC its
+                     signer's wallet signs (header, payload, disclosures) and the check
+                     of that JWS
+  presentations.py   verifying presented credentials (SD-JWT VC, W3C JWT VC/VP): issuer
+                     signature by registry DID, the form's trust, type, validity, status
+                     lists (`get_status_fetch`, overridden in tests), holder binding, claims
+  field_catalog.py   Almena's field catalogue: the only fields forms ask for (standard
+                     names, JSON Schema, value domains from ISO lists via pycountry,
+                     labels per language); Almena's fields go here; a tenant's own are
+                     `custom_fields`
   tenant_health.py   a tenant's health: the checks it must pass to operate (name, mediator,
                      signing flow) and its score; new checks go here
   webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked, never made)
@@ -45,6 +65,19 @@ src/registry_api/
                      signing.py: an issuer's or verifier's signing system (admins set it)
                      (`member_tenant` guards them; keyset paging by cursor)
                      domains.py: the tenant's linked domains, proved by DNS TXT
+                     forms.py: the tenant's forms — the same whoever puts them (an issuer's
+                     offer, a verifier's) —, made of catalogue fields, and the JSON Schema of their answers;
+                     custom_fields.py: the tenant's own fields, beside Almena's catalogue
+                     (`custom:{key}` in forms, never published);
+                     issuer_credentials.py: the credential types an issuer grants, and
+                     the form for each (its offers);
+                     issuance.py: an accepted application's claims, draft and the
+                     signer's wallet request (`sign`, kind `credential`);
+                     applications.py: holders applying for an offer (no account: a
+                     secret), the wallet's pair/present/submit requests on the
+                     sign-in channel, and the issuer's inbox;
+                     fields.py: the field and credential catalogues, public (`/catalog/fields`, and
+                     `/schemas/fields/v1[/{id}.json]` outside /api/v1, on the identity domain)
                      members.py: members and invitations (`admin_of` guards inviting);
                      auth.py's `_sign_in` turns pending invitations into membership
   models/            SQLAlchemy models; import each one in models/__init__.py

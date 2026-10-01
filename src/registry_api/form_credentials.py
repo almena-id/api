@@ -1,0 +1,163 @@
+"""A form's `credentials` block: the credentials it asks people to present.
+
+Each entry names a type of Almena's credential catalogue
+(`registry_api.credential_catalog`) and says, under a key of its own in the
+form, whether it is required, why it is asked for (`purpose`, shown by the
+wallet), which of the type's claims are wanted (selective disclosure; all of
+them when none are named) and whom it is trusted from:
+
+- `registry`: any issuer published in Almena's registry that grants the type;
+- `issuers`: only those named, by DID — published issuers granting the type;
+- `framework`: the type's own trust framework, for types issued elsewhere
+  (the EU PID); the only mode they take, and one Almena's types never take.
+
+A credential *fills* the form's fields named as its requested claims (the
+fields and claims share the field catalogue's names): those come verified from
+it, and are typed only when an optional credential is not presented.
+
+The form's request travels as an OpenID4VP DCQL query (`dcql`): one credential
+query per format the type has (SD-JWT VC, and W3C when it has a W3C type), the
+alternatives of each entry in one credential set. mdoc is left out: its element
+names (the PID's `birth_date`) are not the catalogue's, and would need mapping.
+DCQL's `trusted_authorities` (key ids, ETSI trusted lists, OpenID Federation)
+cannot express DIDs or Almena's registry, so trust is not put in the query:
+it is the form's, checked when a presentation is verified.
+"""
+
+import re
+from typing import Any, Literal
+
+from fastapi import HTTPException, status
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from registry_api import credential_catalog as catalog
+from registry_api import texts
+from registry_api.models import Identity, Issuer
+
+KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+TrustMode = Literal["registry", "issuers", "framework"]
+
+
+class CredentialRequest(BaseModel):
+    # Its name in the form; the type's id when none is given.
+    key: str | None = Field(default=None, max_length=64)
+    type: str = Field(max_length=64)
+    required: bool = True
+    # By language (`registry_api.texts`).
+    purpose: dict[str, str] | None = None
+    # Claims of the type to disclose; all of them when none are named.
+    claims: list[str] | None = Field(default=None, max_length=50)
+    trust: TrustMode | None = None
+    # `issuers`: their DIDs.
+    issuers: list[str] | None = Field(default=None, max_length=50)
+
+    @field_validator("purpose")
+    @classmethod
+    def _purpose(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        return (texts.clean(value, 300) or None) if value is not None else None
+
+
+def _refuse(code: str) -> HTTPException:
+    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=code)
+
+
+async def published_issuers(db: AsyncSession, type_id: str) -> set[str]:
+    """The DIDs of the published issuers, of any tenant, that grant the type."""
+    rows = await db.execute(
+        select(Identity.did, Issuer.credential_types)
+        .join(Identity, Identity.id == Issuer.identity_id)
+        .where(Issuer.published_at.is_not(None), Identity.did.is_not(None))
+    )
+    return {did for did, types in rows if did and type_id in (types or [])}
+
+
+async def stored(db: AsyncSession, requests: list[CredentialRequest]) -> list[dict[str, Any]]:
+    """The block as kept, or why it cannot be."""
+    kept: list[dict[str, Any]] = []
+    for request in requests:
+        item = catalog.BY_ID.get(request.type)
+        if item is None:
+            raise _refuse("credential_unknown")
+        key = request.key or item.id
+        if not KEY.match(key):
+            raise _refuse("credential_key_invalid")
+        offered = [claim.field for claim in item.claims]
+        claims = request.claims or offered
+        if not claims or len(set(claims)) != len(claims) or set(claims) - set(offered):
+            raise _refuse("credential_claims_invalid")
+        external = item.issuance == "external"
+        trust = request.trust or ("framework" if external else "registry")
+        if (trust == "framework") != external:
+            raise _refuse("credential_trust_invalid")
+        entry: dict[str, Any] = {
+            "key": key,
+            "type": item.id,
+            "required": request.required,
+            # In the type's order.
+            "claims": [claim for claim in offered if claim in claims],
+            "trust": trust,
+        }
+        if request.purpose:
+            entry["purpose"] = request.purpose
+        if trust == "issuers":
+            dids = request.issuers or []
+            if (
+                not dids
+                or len(set(dids)) != len(dids)
+                or set(dids) - await published_issuers(db, item.id)
+            ):
+                raise _refuse("credential_trust_invalid")
+            entry["issuers"] = dids
+        elif request.issuers:
+            raise _refuse("credential_trust_invalid")
+        kept.append(entry)
+    if len({entry["key"] for entry in kept}) != len(kept):
+        raise _refuse("credential_key_duplicate")
+    return kept
+
+
+def fills(credentials: list[dict[str, Any]], fields: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """For each credential, the keys of the form's fields it fills: Almena's
+    fields, under their own name, that it asks for as claims."""
+    named = {field["ref"] for field in fields if "as" not in field}
+    return {
+        entry["key"]: [claim for claim in entry["claims"] if claim in named]
+        for entry in credentials
+    }
+
+
+def _queries(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    item = catalog.BY_ID[entry["type"]]
+    claims = entry["claims"]
+    found = [
+        {
+            "id": f"{entry['key']}_sd_jwt",
+            "format": "dc+sd-jwt",
+            "meta": {"vct_values": [catalog.vct(item)]},
+            "claims": [{"path": [claim]} for claim in claims],
+        }
+    ]
+    if item.w3c_type:
+        found.append(
+            {
+                "id": f"{entry['key']}_w3c",
+                "format": "jwt_vc_json",
+                "meta": {"type_values": [["VerifiableCredential", item.w3c_type]]},
+                "claims": [{"path": ["credentialSubject", claim]} for claim in claims],
+            }
+        )
+    return found
+
+
+def dcql(credentials: list[dict[str, Any]]) -> dict[str, Any]:
+    """The OpenID4VP DCQL query a form's credentials make: any one format of
+    each type will do; the optional ones may be left out."""
+    queries: list[dict[str, Any]] = []
+    sets: list[dict[str, Any]] = []
+    for entry in credentials:
+        mine = _queries(entry)
+        queries.extend(mine)
+        sets.append({"options": [[query["id"]] for query in mine], "required": entry["required"]})
+    return {"credentials": queries, "credential_sets": sets}

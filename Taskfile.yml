@@ -15,12 +15,13 @@ tasks:
     silent: true
 
   init:
-    desc: Create .env from .env.example with fresh database and OpenObserve passwords (an existing .env is left untouched)
+    desc: Create .env from .env.example with fresh database, OpenObserve and RabbitMQ passwords (an existing .env is left untouched)
     cmds:
       - cp .env.example .env
       - sed -i.bak "s/^REGISTRY_DB_PASSWORD=$/REGISTRY_DB_PASSWORD=$(openssl rand -hex 24)/" .env && rm .env.bak
       # OpenObserve wants every kind of character: the prefix gives them, the hex the entropy.
       - sed -i.bak "s/^REGISTRY_OPENOBSERVE_PASSWORD=$/REGISTRY_OPENOBSERVE_PASSWORD=Aa1-$(openssl rand -hex 24)/" .env && rm .env.bak
+      - sed -i.bak "s/^REGISTRY_RABBITMQ_PASSWORD=$/REGISTRY_RABBITMQ_PASSWORD=$(openssl rand -hex 24)/" .env && rm .env.bak
     status:
       - test -f .env
 
@@ -46,6 +47,11 @@ tasks:
     desc: Start OpenObserve in Docker (for task dev); its UI is at http://localhost:5080
     cmds:
       - docker compose up --detach openobserve
+
+  rabbitmq:
+    desc: Start RabbitMQ in Docker (for task dev); AMQP on 5672, its management UI at http://localhost:15672
+    cmds:
+      - docker compose up --detach --wait rabbitmq
 
   db:migrate:
     desc: Apply the pending migrations to the database (starts PostgreSQL in Docker)
@@ -93,8 +99,8 @@ tasks:
       - uv run python -m tests.fake_wallet {{.CLI_ARGS}}
 
   dev:
-    desc: Run the API locally with auto-reload against PostgreSQL, Mailpit and OpenObserve in Docker
-    deps: [db:migrate, mail, openobserve]
+    desc: Run the API locally with auto-reload against PostgreSQL, Mailpit, OpenObserve and RabbitMQ in Docker
+    deps: [db:migrate, mail, openobserve, rabbitmq]
     env:
       REGISTRY_DB_HOST: 127.0.0.1
       REGISTRY_LOG_LEVEL: '{{.REGISTRY_LOG_LEVEL | default "DEBUG"}}'
@@ -147,8 +153,8 @@ tasks:
       - docker compose down
 
   down:volume:
-    desc: Stop and remove the Docker containers and their volumes (deletes the database and the indexed logs)
-    prompt: Delete the database and OpenObserve volumes? All their data will be lost.
+    desc: Stop and remove the Docker containers and their volumes (deletes the database, the indexed logs and the broker's queues)
+    prompt: Delete the database, OpenObserve and RabbitMQ volumes? All their data will be lost.
     cmds:
       - docker compose down --volumes --remove-orphans
 

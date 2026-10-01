@@ -195,6 +195,11 @@ class Entry(BaseModel):
     description: str | None = None
     # Mediators: where they listen.
     url: str | None = None
+    # Issuers: their slug (where their offers are), the credential types they
+    # grant (Almena's catalogue) and those they offer — with a form to apply.
+    slug: str | None = None
+    credential_types: list[str] | None = None
+    offers: list[str] | None = None
     published_at: datetime
     tenant: TenantPublic
 
@@ -272,6 +277,11 @@ async def list_published(
                 name=row.name,
                 description=None if isinstance(row, Mediator) else row.description,
                 url=row.url if isinstance(row, Mediator) else None,
+                slug=row.slug if isinstance(row, Issuer) else None,
+                credential_types=row.credential_types if isinstance(row, Issuer) else None,
+                offers=[t for t in row.credential_types if t in (row.request_forms or {})]
+                if isinstance(row, Issuer)
+                else None,
                 published_at=row.published_at,
                 tenant=tenants[row.tenant_id],
             )

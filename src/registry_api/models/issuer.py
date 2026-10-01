@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import ForeignKey, String, Text, Uuid
+from sqlalchemy import JSON, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from registry_api.models.base import (
@@ -37,6 +37,13 @@ class Issuer(SigningMixin, PublishedMixin, TimestampMixin, Base):
     mediator_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("mediators.id", ondelete="SET NULL"), index=True
     )
+
+    # The credential types it grants, by id in Almena's catalogue
+    # (`registry_api.credential_catalog`); none until declared.
+    credential_types: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    # The form a holder fills in to ask for each of them, by type id: the
+    # issuer's offer (`{type_id: form_id}`); a type without one is not offered.
+    request_forms: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, server_default="{}")
 
     identity: Mapped[Identity] = relationship(lazy="joined")
     mediator: Mapped[Mediator | None] = relationship(lazy="joined")

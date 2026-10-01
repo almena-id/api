@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import dids, signing_flows, wallet, webvh
+from registry_api import dids, issuance, signing_flows, wallet, webvh
 from registry_api.api.routes.account import LinkResult, settle_taken
 from registry_api.api.routes.auth import (
     CurrentSession,
@@ -51,6 +51,7 @@ from registry_api.api.routes.members import admin_of
 from registry_api.config import get_settings
 from registry_api.mail import Locale
 from registry_api.models import (
+    Application,
     DidLogEntry,
     Identity,
     Issuer,
@@ -97,14 +98,17 @@ class RequestOut(BaseModel):
     expires_at: datetime
 
 
-SignKind = Literal["did_log_entry", "endorsement"]
+SignKind = Literal["did_log_entry", "endorsement", "credential"]
 
 
 class SignObject(BaseModel):
     """`sign`: what to sign, and what it is.
 
     `did_log_entry`: an identity's next did:webvh log entry, signed with a key
-    named as a `did:key`. `endorsement`: a tenant's membership credential for one of its issuers,
+    named as a `did:key`. `credential`: a credential an issuer grants a holder,
+    an SD-JWT VC (`document`: its header, payload and disclosures; see
+    `registry_api.issuance`), signed as a JWS by the issuer's signer.
+    `endorsement`: a tenant's membership credential for one of its issuers,
     verifiers or mediators (`document`) and, in the same approval, the
     component's `whois.vp` (`presentation`, whose `verifiableCredential` the
     wallet fills with the credential it has just signed), both with a key of
@@ -299,6 +303,9 @@ async def _sign(db: AsyncSession, found: WalletRequest, body: dict[str, Any]) ->
     result: a log entry, or an endorsed (and so published) component."""
     payload = json.loads(found.payload or "{}")
     sign = SignObject.model_validate(payload["sign"])
+    if sign.kind == "credential":
+        await _issue(db, found, payload, sign, body.get("jws"))
+        return
     proof = body.get("proof")
     try:
         did = webvh.check_proof(
@@ -321,6 +328,28 @@ async def _sign(db: AsyncSession, found: WalletRequest, body: dict[str, Any]) ->
     else:
         await _append(db, uuid.UUID(payload["identity_id"]), payload["previous"], sign, proof)
     found.did = did
+    await db.commit()
+
+
+async def _issue(
+    db: AsyncSession,
+    found: WalletRequest,
+    payload: dict[str, Any],
+    sign: SignObject,
+    jws: object,
+) -> None:
+    """The issuer's signer signed the credential: if it is their key, over
+    what was sent, the application's credential is issued."""
+    credential, key = issuance.signed(sign.document, jws, sign.signers)
+    if key not in await my_keys(db, found.user_id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="not_your_key")
+    item = await db.get(Application, uuid.UUID(payload["application_id"]))
+    if item is None or item.status != "accepted":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="application_gone")
+    item.credential = credential
+    item.status = "issued"
+    item.issued_at = datetime.now(UTC)
+    found.did = f"did:key:{key}"
     await db.commit()
 
 

@@ -120,6 +120,34 @@ services:
     volumes:
       - openobserve-data:/data
 
+  rabbitmq:
+    # The tenants' message broker: their applications subscribe over AMQP to
+    # the queues the platform publishes to. REGISTRY_RABBITMQ_ADMIN is the
+    # platform's own account (it replaces `guest`); tenants get users of their
+    # own, limited to their queues. The management UI and HTTP API stay on
+    # loopback, at http://localhost:15672.
+    image: rabbitmq:4.1-management-alpine
+    restart: unless-stopped
+    # The node is named after the hostname and keeps its data under that
+    # name: a fixed one keeps the data across recreated containers.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${REGISTRY_RABBITMQ_ADMIN:-almena}
+      RABBITMQ_DEFAULT_PASS: ${REGISTRY_RABBITMQ_PASSWORD:?set REGISTRY_RABBITMQ_PASSWORD in .env (task init)}
+      RABBITMQ_DEFAULT_VHOST: ${REGISTRY_RABBITMQ_VHOST:-almena}
+    ports:
+      # AMQP, open to the tenants' applications.
+      - "${REGISTRY_RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${REGISTRY_RABBITMQ_UI_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "--quiet", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres-data:
   openobserve-data:
+  rabbitmq-data:
