@@ -68,8 +68,11 @@ src/registry_api/
                      auth.py holds `current_session`, the dependency for signed-in routes;
                      account.py: the account's ways in (email, provider accounts), linked
                      and unlinked, and the move out of an empty account;
+                     tokens.py: the account's API tokens for scripts and CI (sessions
+                     with a name: no idle end; only a sign-in makes them);
                      wallet.py: signing in or linking with an Almena wallet
-                     (requests, the direct_post answer, the portal's poll), and
+                     (requests, the direct_post answer, the portal's or the CLI's poll:
+                     `client` names who asks, and so the token's audience), and
                      the tenant's signers signing an identity's next log entry (`purpose: sign`)
                      directory.py: a tenant's issuers, verifiers, mediators, identities;
                      publication.py: publishing them (the tenant's signers; unpublishing, admins) and the public catalogue;

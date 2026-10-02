@@ -32,6 +32,8 @@ class WalletRequest(TimestampMixin, Base):
     locale: Mapped[str] = mapped_column(String(8))
     # `sign`: what is to be signed — `{"identity_id", "entry", "signers"}` as JSON.
     payload: Mapped[str | None] = mapped_column(Text)
+    # Who asked, and so who the wallet answers to: `portal` or `cli`.
+    client: Mapped[str] = mapped_column(String(16), default="portal", server_default="portal")
     # The wallet's DID once it has answered.
     did: Mapped[str | None] = mapped_column(String(255))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

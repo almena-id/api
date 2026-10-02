@@ -167,3 +167,31 @@ async def test_a_wallet_of_another_account_offers_the_move(
     )
     assert moved.json()["user"]["id"] == owner
     assert moved.json()["user"]["email"] == "ada@example.org"
+
+
+async def test_the_cli_asks_as_itself(client: AsyncClient) -> None:
+    wallet = FakeWallet()
+    response = await client.post(
+        "/api/v1/auth/wallet/requests", json={"purpose": "sign_in", "client": "cli"}
+    )
+    asked = response.json()
+    request = (await client.get(asked["request_uri"])).json()
+    assert request["client_id"] == "http://test/cli"
+    assert request["client_name"] == "Almena CLI"
+
+    # A token for the portal is not one for the CLI.
+    portal = {**request, "client_id": "http://portal.test"}
+    refused = await client.post(request["response_uri"], data={"id_token": wallet.id_token(portal)})
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "invalid_token"
+
+    answered = await client.post(
+        request["response_uri"], data={"id_token": wallet.id_token(request)}
+    )
+    assert answered.status_code == 204
+    assert (await _result(client, asked))["status"] == "signed_in"
+
+
+async def test_an_unknown_client_is_refused(client: AsyncClient) -> None:
+    response = await client.post("/api/v1/auth/wallet/requests", json={"client": "robot"})
+    assert response.status_code == 422

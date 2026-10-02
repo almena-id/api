@@ -204,6 +204,4 @@ async def ask_signature(
         verification_method=issuer.identity.did,
         document=signed,
     )
-    return await new_sign_request(
-        db, session.user_id, body.locale, sign, {"application_id": str(item.id)}
-    )
+    return await new_sign_request(db, session.user_id, body, sign, {"application_id": str(item.id)})

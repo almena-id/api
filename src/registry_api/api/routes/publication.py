@@ -152,7 +152,7 @@ async def publish(
         },
     )
     extra = {"kind": kind, "item_id": str(item.id), "identity_id": str(identity.id)}
-    return await new_sign_request(db, session.user_id, body.locale, request, extra)
+    return await new_sign_request(db, session.user_id, body, request, extra)
 
 
 @router.post(

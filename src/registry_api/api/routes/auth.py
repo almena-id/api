@@ -15,6 +15,8 @@ An account may have other ways in besides its email, or none at all but those:
 A session is an opaque bearer token; the portal keeps it in an HTTP-only
 cookie on its own origin and sends it as ``Authorization: Bearer``. It ends
 ``session_ttl_hours`` after signing in, or after ``session_idle_minutes`` unused.
+The CLI keeps it in the system's keychain; for scripts and CI an account makes
+API tokens (``tokens.py``), sent the same way.
 Errors carry a stable code in ``detail`` for the portal to translate.
 """
 
@@ -156,7 +158,8 @@ async def current_session(
         select(Session).where(
             Session.token_hash == digest(credentials.credentials),
             Session.expires_at > now,
-            Session.last_seen_at > now - _idle(),
+            # An API token (named) is never idle.
+            Session.name.is_not(None) | (Session.last_seen_at > now - _idle()),
         )
     )
     if session is None:
@@ -313,7 +316,10 @@ async def sign_in(db: AsyncSession, user: User) -> SignedIn:
     now = datetime.now(UTC)
     # Ended sessions are swept here, not by a job: signing in is frequent enough.
     await db.execute(
-        delete(Session).where((Session.expires_at <= now) | (Session.last_seen_at <= now - _idle()))
+        delete(Session).where(
+            (Session.expires_at <= now)
+            | (Session.name.is_(None) & (Session.last_seen_at <= now - _idle()))
+        )
     )
     token = new_token()
     expires_at = now + timedelta(hours=get_settings().session_ttl_hours)

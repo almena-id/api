@@ -11,6 +11,11 @@
    seen for the first time signs up an account with no email, and a tenant of
    its own with no name.
 
+The CLI asks the same way (``client: "cli"``): the wallet then answers the CLI
+(``client_id`` ``{public_url}/cli``, on the API's own host, which vouches for
+it) and the sheet names it. The key the wallet signs with comes from the API's
+origin either way, so the portal and the CLI reach the same account.
+
 The request's id travels in the QR code, so it is public: what holds a session
 is the poll secret, which only the portal that asked ever sees.
 
@@ -79,14 +84,20 @@ TTL = timedelta(minutes=5)
 _UNNAMED: dict[Locale, str] = {"en": "Unnamed tenant", "es": "Tenant sin nombre"}
 
 
+# Who asks a wallet: the registry portal, or the `almena` CLI.
+Client = Literal["portal", "cli"]
+
+
 class RequestIn(BaseModel):
     purpose: Literal["sign_in", "link"] = "sign_in"
     locale: Locale = "en"
+    client: Client = "portal"
 
 
 class LocaleIn(BaseModel):
     # The portal's language.
     locale: Locale = "en"
+    client: Client = "portal"
 
 
 class RequestOut(BaseModel):
@@ -144,7 +155,7 @@ class RequestObject(BaseModel):
     # `id_token` for a sign-in or a link; `proof` for a signature.
     response_type: Literal["id_token", "proof"] = "id_token"
     response_mode: Literal["direct_post"] = "direct_post"
-    # The portal: the audience of the token, and what the wallet shows.
+    # The portal or the CLI: the audience of the token, and what the wallet shows.
     client_id: str
     client_name: str
     response_uri: str
@@ -164,6 +175,14 @@ class ResultOut(BaseModel):
     session: SignedIn | None = None
     # With `taken`, when this account is empty: for `POST /auth/me/move`.
     move_ticket: str | None = None
+
+
+def client_of(found: WalletRequest) -> tuple[str, str]:
+    """The `client_id` and `client_name` a request names: whoever asked."""
+    settings = get_settings()
+    if found.client == "cli":
+        return f"{settings.public_url.rstrip('/')}/cli", "Almena CLI"
+    return settings.portal_url.rstrip("/"), "Almena Registry"
 
 
 def _request_uri(request_id: uuid.UUID) -> str:
@@ -192,7 +211,7 @@ async def create_request(body: RequestIn, session: OptionalSession, db: DbSessio
             headers={"WWW-Authenticate": "Bearer"},
         )
     user_id = session.user_id if body.purpose == "link" and session else None
-    return await _new_request(db, body.purpose, user_id, body.locale)
+    return await _new_request(db, body.purpose, user_id, body.locale, body.client)
 
 
 async def _new_request(
@@ -200,6 +219,7 @@ async def _new_request(
     purpose: str,
     user_id: uuid.UUID | None,
     locale: str,
+    client: Client,
     payload: str | None = None,
 ) -> RequestOut:
     now = datetime.now(UTC)
@@ -212,6 +232,7 @@ async def _new_request(
         purpose=purpose,
         user_id=user_id,
         locale=locale,
+        client=client,
         payload=payload,
         expires_at=now + TTL,
     )
@@ -240,10 +261,11 @@ async def read_request(request_id: uuid.UUID, db: DbSession) -> RequestObject:
     sign = None
     if found.purpose == "sign":
         sign = SignObject.model_validate(json.loads(found.payload or "{}")["sign"])
+    client_id, client_name = client_of(found)
     return RequestObject(
         response_type="proof" if sign else "id_token",
-        client_id=get_settings().portal_url.rstrip("/"),
-        client_name="Almena Registry",
+        client_id=client_id,
+        client_name=client_name,
         response_uri=f"{_request_uri(found.id)}/response",
         nonce=found.nonce,
         purpose="sign" if sign else "link" if found.purpose == "link" else "sign_in",
@@ -290,9 +312,7 @@ async def answer_request(request_id: uuid.UUID, request: Request, db: DbSession)
     if not isinstance(token, str):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_token")
     try:
-        did = wallet.verify(
-            token, audience=get_settings().portal_url.rstrip("/"), nonce=found.nonce
-        )
+        did = wallet.verify(token, audience=client_of(found)[0], nonce=found.nonce)
     except wallet.WalletError as error:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=error.code) from None
     found.did = did
@@ -551,7 +571,7 @@ async def sign_identity(
         "identity_id": str(identity.id),
         "previous": entries[-1]["versionId"] if entries else None,
     }
-    return await new_sign_request(db, session.user_id, body.locale, sign, extra)
+    return await new_sign_request(db, session.user_id, body, sign, extra)
 
 
 async def my_keys(db: AsyncSession, user_id: uuid.UUID | None) -> list[str]:
@@ -567,11 +587,12 @@ async def my_keys(db: AsyncSession, user_id: uuid.UUID | None) -> list[str]:
 async def new_sign_request(
     db: AsyncSession,
     user_id: uuid.UUID,
-    locale: str,
+    asked: LocaleIn,
     sign: SignObject,
     extra: dict[str, Any],
 ) -> RequestOut:
-    """A request for `user_id`'s wallet to sign `sign`; `extra` is kept for
-    when the answer comes (what it belongs to)."""
+    """A request for `user_id`'s wallet to sign `sign`, asked by the portal or
+    the CLI in `asked`; `extra` is kept for when the answer comes (what it
+    belongs to)."""
     payload = {"sign": sign.model_dump(), **extra}
-    return await _new_request(db, "sign", user_id, locale, json.dumps(payload))
+    return await _new_request(db, "sign", user_id, asked.locale, asked.client, json.dumps(payload))
