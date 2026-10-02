@@ -51,7 +51,8 @@ src/registry_api/
   oauth.py           social sign-in providers (Google, Microsoft, Apple, GitHub):
                      authorize URL, code exchange, the verified email they vouch for
   api/router.py      /api/v1 router: include new route modules here
-  api/routes/        one module per resource (health.py and did_documents.py,
+  api/routes/        one module per resource (home.py, the browser page at `/` in red
+                     with its typefaces at `/fonts/` from `assets/fonts`; health.py and did_documents.py,
                      the public did.json, and well_known.py, the root's
                      did.json and the did-configuration.json served from disk, live outside /api/v1);
                      auth.py holds `current_session`, the dependency for signed-in routes;

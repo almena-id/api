@@ -1,0 +1,31 @@
+@font-face{font-family:"Chakra Petch";font-weight:500;font-display:swap;src:url(/fonts/chakra-petch-500.woff2) format("woff2")}
+@font-face{font-family:"Chakra Petch";font-weight:600;font-display:swap;src:url(/fonts/chakra-petch-600.woff2) format("woff2")}
+@font-face{font-family:"Chakra Petch";font-weight:700;font-display:swap;src:url(/fonts/chakra-petch-700.woff2) format("woff2")}
+@font-face{font-family:"Inter";font-weight:100 900;font-display:swap;src:url(/fonts/inter.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-weight:100 800;font-display:swap;src:url(/fonts/jetbrains-mono.woff2) format("woff2")}
+:root{color-scheme:dark;--brand:#e0413a;--bg:#0f1013;--glow:rgba(224,65,58,.22);--surface:rgba(255,255,255,.06);--border:rgba(255,255,255,.09);--hover:rgba(255,255,255,.07);--text:#f4f4f6;--muted:rgba(244,244,246,.62);--ok:#3ddc84;--down:#ffb547;--font-brand:"Chakra Petch",system-ui,sans-serif;--font-sans:"Inter",system-ui,sans-serif;--font-mono:"JetBrains Mono",ui-monospace,monospace;--page-width:1920px;--gutter:clamp(16px,3vw,48px)}
+html,body{margin:0}
+body{display:flex;flex-direction:column;min-height:100dvh;background:radial-gradient(60rem 40rem at 50% 40%,var(--glow),transparent 70%) fixed,var(--bg);color:var(--text);font-family:var(--font-sans);line-height:1.5;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+h1,h2{font-family:var(--font-brand);letter-spacing:-.025em}
+code{font-family:var(--font-mono);overflow-wrap:anywhere}
+a{color:inherit}
+.frame{width:100%;max-width:var(--page-width);margin-inline:auto;padding-inline:var(--gutter);box-sizing:border-box}
+.mark{flex:none;color:var(--brand)}
+header{position:sticky;top:0;z-index:10;border-bottom:1px solid var(--border);background:rgba(15,16,19,.8);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+header .frame{display:flex;align-items:center;gap:1rem;padding-block:.75rem}
+.wordmark{display:inline-flex;align-items:center;gap:.625rem;font-family:var(--font-brand);font-size:17px;letter-spacing:-.025em;white-space:nowrap;text-decoration:none}
+.wordmark strong{font-weight:600}
+main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5rem;padding-block:2rem 3rem;text-align:center}
+h1{margin:0;font-size:clamp(2rem,5vw,3rem);font-weight:600;line-height:1.1}
+h1 span{color:var(--brand)}
+.lead{margin:0;max-width:36rem;color:var(--muted)}
+.status{display:inline-flex;align-items:center;gap:.5rem;padding:.35rem .85rem;border:1px solid var(--border);border-radius:999px;background:var(--surface);font-size:.875rem}
+.status::before{content:"";width:.5rem;height:.5rem;border-radius:50%;background:var(--c);box-shadow:0 0 .5rem var(--c)}
+.ok{--c:var(--ok)}.down{--c:var(--down)}
+dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.5rem 1rem;margin:0;font-size:.875rem;text-align:left;max-width:100%}
+dt{color:var(--muted)}dd{margin:0;min-width:0}
+footer{border-top:1px solid var(--border);color:var(--muted);font-size:.875rem}
+footer .frame{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;padding-block:1.25rem}
+footer .name{display:inline-flex;align-items:center;gap:.5rem;color:var(--text)}
+footer a{text-decoration:none}
+footer a:hover{color:var(--text);text-decoration:underline}

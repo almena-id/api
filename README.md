@@ -66,6 +66,8 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 
 | | |
 |---|---|
+| `GET /` | The home page for browsers (HTML, in red): status, version, database |
+| `GET /fonts/{name}` | The home page's typefaces (Chakra Petch, Inter, JetBrains Mono; woff2) |
 | `GET /health` | Liveness: the process is up |
 | `GET /health/ready` | Readiness: `503` while the database is unreachable |
 | `POST /api/v1/auth/code` | Email a six-digit sign-in code (`locale`: `en` or `es`); `503 mail_unavailable` |
