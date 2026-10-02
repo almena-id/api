@@ -1,4 +1,4 @@
-"""Backend API of the Almena Network registry portal."""
+"""Backend API of the Almena ID registry portal."""
 
 from importlib.metadata import version
 

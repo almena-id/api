@@ -1,7 +1,7 @@
 [project]
 name = "registry-api"
 version = "0.1.0"
-description = "Backend API of the Almena Network registry portal"
+description = "Backend API of the Almena ID registry portal"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"

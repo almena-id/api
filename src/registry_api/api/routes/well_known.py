@@ -26,7 +26,7 @@ from registry_api.root import root_tenant
 router = APIRouter(prefix="/.well-known", tags=["did"])
 
 # Where vulnerabilities are reported: privately, through the repository's GitHub.
-REPOSITORY = "https://github.com/almena-network/api"
+REPOSITORY = "https://github.com/almena-id/api"
 # security.txt must expire, in less than a year; written on each request, it
 # stays this far ahead while the API runs.
 SECURITY_TXT_TTL = timedelta(days=180)

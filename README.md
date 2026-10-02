@@ -1,6 +1,6 @@
 # almena-api
 
-The backend of the Almena Network registry portal: a [FastAPI](https://fastapi.tiangolo.com) service on PostgreSQL, consumed by [registry](../registry).
+The backend of the Almena ID registry portal: a [FastAPI](https://fastapi.tiangolo.com) service on PostgreSQL, consumed by [registry](../registry).
 
 Built with Python 3.13, [uv](https://docs.astral.sh/uv/), SQLAlchemy 2 (async, asyncpg), Alembic for migrations and pydantic-settings for configuration.
 
