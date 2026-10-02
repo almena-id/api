@@ -14,6 +14,8 @@ task up     # PostgreSQL + migrations + API in Docker
 task health # {"status":"ok","version":"0.1.0","database":"ok","vault":"ok"}
 ```
 
+Every merge into `main` publishes the image `ghcr.io/almena-id/api` (amd64 and arm64) with a `year.month.sequence` version (e.g. `2026.10.1`, the sequence restarting each month), also tagged `latest` and `sha-<commit>`; the commit gets the git tag `v<version>`. The image reports that version (`ALMENA_VERSION`); outside it, the package's. See [.github/workflows/docker.yml](.github/workflows/docker.yml).
+
 There are no passwords: signing up and signing in are the same flow, an email with a six-digit code. In development every email lands in [Mailpit](https://mailpit.axllent.org) at `http://localhost:8025` (`task up` starts it, `task dev` too).
 
 Logs are indexed in [OpenObserve](https://openobserve.ai) at `http://localhost:5080` (`task up` starts it, `task dev` too), signing in as `REGISTRY_OPENOBSERVE_ADMIN` with `REGISTRY_OPENOBSERVE_PASSWORD`; entries older than `REGISTRY_OPENOBSERVE_RETENTION_DAYS` (30) are deleted.
@@ -68,7 +70,7 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 |---|---|
 | `GET /` | The home page for browsers (HTML, in red): status, version, database |
 | `GET /fonts/{name}` | The home page's typefaces (Chakra Petch, Inter, JetBrains Mono; woff2) |
-| `GET /health` | Liveness: the process is up |
+| `GET /health` | Liveness: the process is up, and the running version |
 | `GET /health/ready` | Readiness: `503` while the database or the vault is unreachable (`database`, `vault`: `ok` or `unavailable`) |
 | `POST /api/v1/auth/code` | Email a six-digit sign-in code (`locale`: `en` or `es`); `503 mail_unavailable` |
 | `POST /api/v1/auth/verify` | Exchange the code for a session, creating the account the first time — with a tenant of its own named "Tenant of {email}" in `locale` (`en`, `es`: "Tenant de …"), unless it was invited into one; `401 invalid_code`, `429 too_many_attempts` |

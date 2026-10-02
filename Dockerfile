@@ -20,6 +20,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # ---- runtime ----
 FROM python:3.13-slim-trixie AS runtime
+# year.month.sequence, set by the image workflow; /health reports it.
+ARG ALMENA_VERSION
 RUN useradd --system --uid 10001 --no-create-home registry
 WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
@@ -29,6 +31,7 @@ USER registry
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
+    ALMENA_VERSION=$ALMENA_VERSION \
     REGISTRY_HOST=0.0.0.0 \
     REGISTRY_PORT=8000 \
     REGISTRY_ENVIRONMENT=production
