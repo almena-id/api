@@ -6,14 +6,16 @@
 exists (``registry-api init-root``) and one of its admins has signed it.
 ``did-configuration.json`` holds a Domain Linkage Credential signed with the
 DID's key, which the API does not hold, so it is produced elsewhere and served
-as it is from ``REGISTRY_WELL_KNOWN_DIR``.
+as it is from ``REGISTRY_WELL_KNOWN_DIR``. ``security.txt`` (RFC 9116) says
+where to report a vulnerability, for the identity domain and the API's own.
 """
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 
 from registry_api import dids, webvh
 from registry_api.api.routes.auth import DbSession
@@ -22,6 +24,12 @@ from registry_api.config import get_settings
 from registry_api.root import root_tenant
 
 router = APIRouter(prefix="/.well-known", tags=["did"])
+
+# Where vulnerabilities are reported: privately, through the repository's GitHub.
+REPOSITORY = "https://github.com/almena-network/api"
+# security.txt must expire, in less than a year; written on each request, it
+# stays this far ahead while the API runs.
+SECURITY_TXT_TTL = timedelta(days=180)
 
 
 async def _root_log(db: DbSession) -> list[webvh.Entry]:
@@ -62,3 +70,19 @@ async def did_configuration() -> FileResponse:
     if path is None or not path.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
     return FileResponse(path, media_type="application/json")
+
+
+@router.get(
+    "/security.txt",
+    summary="Where to report a vulnerability (RFC 9116)",
+    tags=["security"],
+    response_class=PlainTextResponse,
+)
+async def security_txt() -> PlainTextResponse:
+    expires = (datetime.now(UTC) + SECURITY_TXT_TTL).replace(microsecond=0)
+    return PlainTextResponse(
+        f"Contact: {REPOSITORY}/security/advisories/new\n"
+        f"Expires: {expires.isoformat().replace('+00:00', 'Z')}\n"
+        f"Policy: {REPOSITORY}/security/policy\n"
+        "Preferred-Languages: en, es\n"
+    )

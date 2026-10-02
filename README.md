@@ -158,6 +158,7 @@ All settings are `REGISTRY_*` environment variables, read from the environment o
 | `GET /ids/{slug}/did.json` | Public: an identity's DID document, where `did:web:almena.id:ids:{slug}` resolves (through the identity domain's proxy) (`application/did+json`). Its `DIDCommMessaging` service is a mediator's address for a mediator's identity, and the DID of the chosen mediator for the tenant's, an issuer's or a verifier's. An issuer's, verifier's or mediator's names its tenant's DID as `controller`; a tenant's has a `LinkedDomains` service with its verified domains |
 | `GET /.well-known/did.json` | Public: the identity domain's own DID document (`did:web:almena.id`, `application/did+json`): the root tenant's identity; `404` until the root exists |
 | `GET /.well-known/did-configuration.json` | Public: the origin's [DID configuration](https://identity.foundation/.well-known/resources/did-configuration/) (Domain Linkage Credentials, signed elsewhere), served as it is from the same directory; `404` without it |
+| `GET /.well-known/security.txt` | Public: where to report a vulnerability ([RFC 9116](https://www.rfc-editor.org/rfc/rfc9116)): this repository's private advisories; `Expires` stays 180 days ahead |
 | `GET /docs`, `GET /openapi.json` | API reference ([Scalar](https://scalar.com)) and the OpenAPI document, generated from the code (not in production) |
 
 ## Social sign-in
