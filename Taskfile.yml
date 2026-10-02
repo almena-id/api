@@ -182,3 +182,15 @@ tasks:
       - rm -rf .venv .pytest_cache .mypy_cache .ruff_cache
       - find . -name __pycache__ -type d -prune -exec rm -rf {} +
       - docker image rm -f {{.IMAGE}}
+
+  clean:all:
+    desc: Leave the repository as cloned — clean, plus the containers and their volumes, .env, the fake wallet key, coverage output and the Task checksums
+    prompt: Remove the containers and volumes (database, OpenObserve, RabbitMQ), .env and the fake wallet key? All their data will be lost.
+    cmds:
+      # By the project's name, away from compose.yml: it needs no .env, so a
+      # second run, or one after .env is gone, still works.
+      - cd / && docker compose --project-name almena-api down --volumes --remove-orphans
+      - task: clean
+      - rm -rf .task .fake-wallet-key .coverage htmlcov build dist
+      - find . -name '*.egg-info' -type d -prune -exec rm -rf {} +
+      - find . -maxdepth 1 -name '.env*' ! -name '.env.example' -exec rm -f {} +
