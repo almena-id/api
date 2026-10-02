@@ -8,8 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_api.config import get_settings
 from registry_api.models import TenantMember
 from registry_api.root import create_root
-from tests.conftest import Outbox
+from tests.conftest import Dns, Outbox
 from tests.fake_wallet import FakeWallet
+from tests.mediators import new_mediator
 from tests.signing import Headers, link_wallet, publish, ready, sign
 from tests.test_directory import _sign_in
 
@@ -31,12 +32,15 @@ def _issues(health: dict[str, Any]) -> dict[str, str | None]:
 
 
 async def _published_mediator(
-    client: AsyncClient, headers: Headers, tenant: str, *, public: bool, wallet: FakeWallet
+    client: AsyncClient,
+    headers: Headers,
+    tenant: str,
+    dns: Dns,
+    *,
+    public: bool,
+    wallet: FakeWallet,
 ) -> str:
-    body = {"name": "Relay", "url": "https://relay.example.org", "public": public}
-    mediator = (
-        await client.post(f"/api/v1/tenants/{tenant}/mediators", json=body, headers=headers)
-    ).json()
+    mediator = await new_mediator(client, headers, tenant, dns, subdomain="relay", public=public)
     await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
     await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
     mediator_id: str = mediator["id"]
@@ -52,15 +56,12 @@ async def test_a_new_tenant_lacks_a_mediator_and_a_wallet(
     assert health["score"] == 33
 
 
-async def test_it_is_whole_once_set_up(client: AsyncClient, outbox: Outbox) -> None:
+async def test_it_is_whole_once_set_up(client: AsyncClient, outbox: Outbox, dns: Dns) -> None:
     ada, tenant = await _sign_in(client, outbox, "ada@example.org")
     wallet = await ready(client, ada, tenant)
     assert _issues(await _health(client, ada, tenant))["signing_flow"] is None
 
-    body = {"name": "Relay", "url": "https://relay.example.org"}
-    mediator = (
-        await client.post(f"/api/v1/tenants/{tenant}/mediators", json=body, headers=ada)
-    ).json()
+    mediator = await new_mediator(client, ada, tenant, dns, subdomain="relay")
     picked = {"mediator_id": mediator["id"]}
     await client.patch(f"/api/v1/tenants/{tenant}", json=picked, headers=ada)
     # A draft's DID does not resolve: nothing routes through it yet.
@@ -106,20 +107,16 @@ async def test_members_see_it_outsiders_do_not(client: AsyncClient, outbox: Outb
 
 
 async def test_a_public_mediator_is_offered_to_every_tenant(
-    client: AsyncClient, outbox: Outbox
+    client: AsyncClient, outbox: Outbox, dns: Dns
 ) -> None:
     ada, adas = await _sign_in(client, outbox, "ada@example.org")
     bob, bobs = await _sign_in(client, outbox, "bob@example.org")
     wallet = await ready(client, ada, adas)
-    private = await _published_mediator(client, ada, adas, public=False, wallet=wallet)
-    public = await _published_mediator(client, ada, adas, public=True, wallet=wallet)
+    private = await _published_mediator(client, ada, adas, dns, public=False, wallet=wallet)
+    public = await _published_mediator(client, ada, adas, dns, public=True, wallet=wallet)
     draft = (
-        await client.post(
-            f"/api/v1/tenants/{adas}/mediators",
-            json={"name": "Draft", "url": "https://draft.example.org", "public": True},
-            headers=ada,
-        )
-    ).json()["id"]
+        await new_mediator(client, ada, adas, dns, name="Draft", subdomain="draft", public=True)
+    )["id"]
 
     choices = (await client.get(f"/api/v1/tenants/{bobs}/mediator-choices", headers=bob)).json()
     assert [(c["id"], c["own"], c["published"]) for c in choices] == [(public, False, True)]

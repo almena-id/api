@@ -4,19 +4,23 @@ import pytest
 from httpx import AsyncClient
 
 from registry_api import webvh
-from tests.conftest import Outbox
+from tests.conftest import Dns, Outbox
 from tests.fake_wallet import FakeWallet
+from tests.mediators import new_mediator, verified_domain
 from tests.signing import link_wallet, publish, ready, sign
 from tests.test_directory import _sign_in
 
 
 @pytest.mark.parametrize("kind", ["issuers", "verifiers", "mediators"])
 async def test_a_draft_is_seen_only_inside_its_tenant(
-    client: AsyncClient, outbox: Outbox, kind: str
+    client: AsyncClient, outbox: Outbox, dns: Dns, kind: str
 ) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}/{kind}"
-    body = {"name": "Uni", "description": "Degrees", "url": "https://mediator.example.org"}
+    body: dict[str, str] = {"name": "Uni", "description": "Degrees"}
+    if kind == "mediators":
+        body["subdomain"] = "mediator"
+        body["domain_id"] = await verified_domain(client, headers, tenant, dns)
     created = (await client.post(base, json=body, headers=headers)).json()
     assert created["published_at"] is None
     wallet = await ready(client, headers, tenant)
@@ -79,13 +83,12 @@ async def test_only_the_flows_signers_publish(client: AsyncClient, outbox: Outbo
 
 
 async def test_no_document_routes_through_a_draft_mediator(
-    client: AsyncClient, outbox: Outbox
+    client: AsyncClient, outbox: Outbox, dns: Dns
 ) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
     wallet = await ready(client, headers, tenant)
-    body = {"name": "Relay", "url": "https://mediator.example.org"}
-    mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
+    mediator = await new_mediator(client, headers, tenant, dns)
     await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
     body = {"name": "Uni", "mediator_id": mediator["id"]}
     issuer = (await client.post(f"{base}/issuers", json=body, headers=headers)).json()
@@ -118,11 +121,14 @@ async def test_the_catalogue_pages(client: AsyncClient, outbox: Outbox) -> None:
 
 @pytest.mark.parametrize("kind", ["issuers", "verifiers", "mediators"])
 async def test_an_admin_deletes_one_with_its_identity(
-    client: AsyncClient, outbox: Outbox, kind: str
+    client: AsyncClient, outbox: Outbox, dns: Dns, kind: str
 ) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
-    body = {"name": "Uni", "url": "https://mediator.example.org"}
+    body = {"name": "Uni"}
+    if kind == "mediators":
+        body["subdomain"] = "mediator"
+        body["domain_id"] = await verified_domain(client, headers, tenant, dns)
     item = (await client.post(f"{base}/{kind}", json=body, headers=headers)).json()
     wallet = await ready(client, headers, tenant)
     await sign(client, headers, tenant, item["identity"]["id"], wallet)
@@ -142,12 +148,11 @@ async def test_an_admin_deletes_one_with_its_identity(
 
 
 async def test_deleting_a_mediator_leaves_its_users_without_one(
-    client: AsyncClient, outbox: Outbox
+    client: AsyncClient, outbox: Outbox, dns: Dns
 ) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
-    body = {"name": "Relay", "url": "https://mediator.example.org"}
-    mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
+    mediator = await new_mediator(client, headers, tenant, dns)
     body = {"name": "Uni", "mediator_id": mediator["id"]}
     issuer = (await client.post(f"{base}/issuers", json=body, headers=headers)).json()
     await client.patch(base, json={"mediator_id": mediator["id"]}, headers=headers)

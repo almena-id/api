@@ -12,7 +12,7 @@ portal — they have no account here, and need none:
    `pair`) and shows it as ``almena://auth?request_uri=…``. The wallet reads it
    (``GET /applications/{id}/request``) and answers by ``direct_post`` with an
    ``id_token`` by the `did:key` it keeps for this issuer: the application is
-   then that holder's.
+   then that holder's, once and for all.
 3. **Fill in**: present credentials the form asks for (`present`: an OpenID4VP
    request with the form's DCQL query, answered with a ``vp_token``, verified
    by `registry_api.presentations`; the fields they fill come from them), type
@@ -26,7 +26,7 @@ portal — they have no account here, and need none:
    for a `receive` request (QR 3); the wallet answers with an ``id_token`` by
    the `did:key` it paired with — the one the credential is bound to — and the
    answer to that post is the credential itself (an SD-JWT VC with all its
-   disclosures). It can be taken again, by that key only.
+   disclosures). It is taken once.
 
 The issuer's tenant reads submitted applications, their files and the
 holder's signature, and accepts or rejects them (``/tenants/{id}/applications``).
@@ -468,6 +468,17 @@ class WalletIn(BaseModel):
     purpose: Purpose
 
 
+async def _complete(db: AsyncSession, item: Application, form: Form) -> None:
+    """Every answer and required credential in, or `answers_incomplete`."""
+    _, errors = checks.check(
+        await checks.fields_of(db, form), item.answers, await _files(db, item), set(_filled(item))
+    )
+    verified = {r["key"] for r in item.presented if r.get("verified")}
+    required = {e["key"] for e in form.credentials if e["required"]}
+    if errors or required - verified:
+        raise _refuse("answers_incomplete")
+
+
 @router.post(
     "/{application_id}/wallet",
     summary="Ask the holder's wallet: pair (QR 1), present credentials, submit (QR 2) "
@@ -475,7 +486,8 @@ class WalletIn(BaseModel):
     responses={
         status.HTTP_409_CONFLICT: {
             "description": "`application_closed`, `application_not_paired`, "
-            "`nothing_to_present`, `answers_incomplete`, `not_issued`"
+            "`nothing_to_present`, `answers_incomplete`, `not_issued`, "
+            "`already_paired`, `already_received`"
         },
     },
 )
@@ -483,22 +495,19 @@ async def ask_wallet(item: Mine, body: WalletIn, db: DbSession) -> dict[str, Any
     if body.purpose == "receive":
         if item.status != "issued":
             raise _refuse("not_issued")
+        if item.delivered_at is not None:
+            raise _refuse("already_received")
     elif item.status not in ("open", "paired"):
         raise _refuse("application_closed")
+    if body.purpose == "pair" and item.status != "open":
+        raise _refuse("already_paired")
     _, form = await _parts(db, item)
     if body.purpose in ("present", "submit"):
         _paired(item)
     if body.purpose == "present" and not form.credentials:
         raise _refuse("nothing_to_present")
     if body.purpose == "submit":
-        filled = _filled(item)
-        _, errors = checks.check(
-            await checks.fields_of(db, form), item.answers, await _files(db, item), set(filled)
-        )
-        verified = {r["key"] for r in item.presented if r.get("verified")}
-        required = {e["key"] for e in form.credentials if e["required"]}
-        if errors or required - verified:
-            raise _refuse("answers_incomplete")
+        await _complete(db, item, form)
     item.wallet_purpose = body.purpose
     item.wallet_nonce = secrets.token_urlsafe(24)
     item.wallet_expires_at = datetime.now(UTC) + WALLET_TTL
@@ -586,7 +595,10 @@ async def _answer(request: Request) -> dict[str, Any]:
             "description": "`receive`: `{format, credential, issuer, credential_type}`"
         },
         status.HTTP_404_NOT_FOUND: {"description": "`request_not_found`"},
-        status.HTTP_409_CONFLICT: {"description": "`already_answered`"},
+        status.HTTP_409_CONFLICT: {
+            "description": "`already_answered`, `answers_incomplete`, `already_paired`, "
+            "`already_received`"
+        },
         status.HTTP_410_GONE: {"description": "`request_expired`"},
     },
 )
@@ -607,9 +619,8 @@ async def answer_request(
                 did = wallet.verify(token, audience=_client_id(), nonce=str(item.wallet_nonce))
             except wallet.WalletError as error:
                 raise _refuse(error.code, bad) from None
-            if item.holder_did not in (None, did):
-                # Another wallet: what the last one presented is not its own.
-                item.presented = []
+            if item.status != "open":
+                raise _refuse("already_paired")
             item.holder_did = did
             item.status = "paired"
         case "present":
@@ -660,6 +671,9 @@ async def answer_request(
                 raise _refuse("invalid_signature", bad)
             if claims.get("digest") != expected:
                 raise _refuse("digest_mismatch", bad)
+            # What was complete when asked may not be now (a file removed since).
+            _, form = await _parts(db, item)
+            await _complete(db, item, form)
             item.status = "submitted"
             item.digest = expected
             item.signature = token
@@ -674,6 +688,8 @@ async def _deliver(db: AsyncSession, item: Application, token: object) -> Respon
     bad = status.HTTP_400_BAD_REQUEST
     if not isinstance(token, str) or item.credential is None:
         raise _refuse("invalid_token", bad)
+    if item.delivered_at is not None:
+        raise _refuse("already_received")
     try:
         did = wallet.verify(token, audience=_client_id(), nonce=str(item.wallet_nonce))
     except wallet.WalletError as error:

@@ -115,6 +115,7 @@ async def add_domain(tenant_id: AdminTenant, body: DomainIn, db: DbSession) -> D
     summary="Look for the DNS record (admins): found, the domain is verified",
     responses={
         status.HTTP_404_NOT_FOUND: {"description": "`domain_not_found`"},
+        status.HTTP_409_CONFLICT: {"description": "`domain_verified`"},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "`dns_record_not_found`"},
         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "`dns_unavailable`"},
     },
@@ -123,6 +124,8 @@ async def check_domain(
     tenant_id: AdminTenant, domain_id: uuid.UUID, db: DbSession, lookup: TxtLookup
 ) -> DomainOut:
     item = await _owned(db, tenant_id, domain_id)
+    if item.verified_at is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="domain_verified")
     name, value = checks.dns_record(item.domain, item.dns_token)
     try:
         found = value in (record.strip() for record in await lookup(name))
@@ -130,9 +133,8 @@ async def check_domain(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=error.code) from None
     if not found:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="dns_record_not_found")
-    if item.verified_at is None:
-        item.verified_at = datetime.now(UTC)
-        await db.commit()
+    item.verified_at = datetime.now(UTC)
+    await db.commit()
     return _out(item)
 
 

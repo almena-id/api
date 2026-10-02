@@ -35,6 +35,16 @@ issuer or a verifier, the wallets of the member its signing system names; a
 mediator signs nothing. Every key is a person's registry `did:key`: the
 registry holds none.
 
+**Messaging.** An issuer or a verifier gets a key to receive messages
+(X25519, under `keyAgreement`) when its signer signs it: see `messaging_keys`.
+
+**Phases.** A document says only what is true already, so it grows with the
+item: its DID once the first entry is signed (until then, the template);
+`controller` and `authentication` once the tenant's own DID is signed;
+`assertionMethod` once its signer has a wallet; `keyAgreement` once its
+messaging key exists; the DIDComm service once there is somewhere to deliver
+to — a published mediator and, for an issuer or verifier, a key to encrypt to.
+
 An issuer, verifier or mediator that is still a draft (unpublished) has no
 public document, and no document routes messages through a draft mediator.
 """
@@ -48,7 +58,7 @@ from urllib.parse import quote, urlsplit
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import signing_flows, webvh
+from registry_api import messaging_keys, signing_flows, webvh
 from registry_api.models import (
     DidLogEntry,
     Identity,
@@ -106,20 +116,23 @@ def document(
     keys: list[str] | None = None,
     authenticate: bool = False,
     controller_keys: list[str] | None = None,
+    agreement_key: str | None = None,
 ) -> dict[str, Any]:
     """The DID document an identity publishes: `endpoint` is where its DIDComm
     messages go (an address, or a mediator's DID), `controller` the DID of the
     tenant it belongs to, `domains` the tenant's proved domains, `keys` the
-    multikeys that sign for it; each if any."""
+    multikeys that sign for it, `agreement_key` the one messages to it are
+    encrypted to; each if any."""
     context = [DID_CONTEXT]
-    if keys:
+    if keys or agreement_key:
         context.append(MULTIKEY_CONTEXT)
     if domains:
         context.append(LINKED_DOMAINS_CONTEXT)
     doc: dict[str, Any] = {"@context": context, "id": did}
     if controller:
         doc["controller"] = controller
-    if keys:
+    methods = [*(keys or []), *([agreement_key] if agreement_key else [])]
+    if methods:
         doc["verificationMethod"] = [
             {
                 "id": f"{did}#{key}",
@@ -127,8 +140,9 @@ def document(
                 "controller": did,
                 "publicKeyMultibase": key,
             }
-            for key in keys
+            for key in methods
         ]
+    if keys:
         doc["assertionMethod"] = [f"{did}#{key}" for key in keys]
         # A tenant's keys also sign its presentations (its `whois.vp`).
         if authenticate:
@@ -137,6 +151,8 @@ def document(
     # the keys its signing flow names, as methods of the tenant's DID.
     if controller and controller_keys:
         doc["authentication"] = [f"{controller}#{key}" for key in controller_keys]
+    if agreement_key:
+        doc["keyAgreement"] = [f"{did}#{agreement_key}"]
     service: list[dict[str, Any]] = []
     if endpoint:
         service.append(
@@ -238,14 +254,19 @@ async def desired(db: AsyncSession, did_url: str, identity: Identity) -> dict[st
     did = identity.did or template_for(did_url, identity.slug, root)
     own = await db.scalar(select(Tenant.id).where(Tenant.identity_id == identity.id))
     controller = await controller_for(db, identity.id)
+    endpoint = await endpoint_for(db, identity.id)
+    # An issuer or verifier with no key yet has nothing to be written to with.
+    if identity.agreement_key is None and await messaging_keys.owner(db, identity.id):
+        endpoint = None
     return document(
         did,
-        await endpoint_for(db, identity.id),
+        endpoint,
         controller=controller,
         domains=await linked_domains(db, identity.id),
         keys=await signing_keys(db, identity),
         authenticate=own is not None,
         controller_keys=await update_keys(db, identity.tenant_id) if controller else None,
+        agreement_key=identity.agreement_key,
     )
 
 

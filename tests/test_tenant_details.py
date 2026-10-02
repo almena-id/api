@@ -1,6 +1,7 @@
 from httpx import AsyncClient
 
-from tests.conftest import Outbox
+from tests.conftest import Dns, Outbox
+from tests.mediators import new_mediator
 
 
 async def _sign_in(client: AsyncClient, outbox: Outbox, email: str) -> dict[str, str]:
@@ -24,11 +25,13 @@ async def test_details_start_without_a_mediator(client: AsyncClient, outbox: Out
     assert body["mediator"] is None
 
 
-async def test_the_tenant_picks_one_of_its_mediators(client: AsyncClient, outbox: Outbox) -> None:
+async def test_the_tenant_picks_one_of_its_mediators(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
     ada = await _sign_in(client, outbox, "ada@example.org")
-    url = f"/api/v1/tenants/{await _tenant(client, ada)}"
-    body = {"name": "Relay", "url": "https://mediator.example.org"}
-    mediator = (await client.post(f"{url}/mediators", json=body, headers=ada)).json()
+    tenant = await _tenant(client, ada)
+    url = f"/api/v1/tenants/{tenant}"
+    mediator = await new_mediator(client, ada, tenant, dns)
 
     picked = await client.patch(url, json={"mediator_id": mediator["id"]}, headers=ada)
     assert picked.status_code == 200, picked.text
@@ -41,16 +44,11 @@ async def test_the_tenant_picks_one_of_its_mediators(client: AsyncClient, outbox
 
 
 async def test_another_tenants_mediator_cannot_be_picked(
-    client: AsyncClient, outbox: Outbox
+    client: AsyncClient, outbox: Outbox, dns: Dns
 ) -> None:
     ada = await _sign_in(client, outbox, "ada@example.org")
     bob = await _sign_in(client, outbox, "bob@example.org")
-    body = {"name": "Bob's", "url": "https://bob.example.org"}
-    bobs = (
-        await client.post(
-            f"/api/v1/tenants/{await _tenant(client, bob)}/mediators", json=body, headers=bob
-        )
-    ).json()
+    bobs = await new_mediator(client, bob, await _tenant(client, bob), dns, name="Bob's")
     response = await client.patch(
         f"/api/v1/tenants/{await _tenant(client, ada)}",
         json={"mediator_id": bobs["id"]},

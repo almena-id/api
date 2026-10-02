@@ -177,6 +177,9 @@ async def test_the_issuers_signer_issues_and_the_holder_receives_it(
     credential = delivered["credential"]
     assert credential.count("~") == len(document["disclosures"]) + 1
     assert (await client.get(base, headers=secret)).json()["delivered_at"]
+    # Received once.
+    twice = await client.post(f"{base}/wallet", json={"purpose": "receive"}, headers=secret)
+    assert twice.status_code == 409 and twice.json()["detail"] == "already_received"
 
     # And it holds: presented, with the holder's key, it is verified.
     forms = f"/api/v1/tenants/{tenant}/forms"
@@ -248,3 +251,10 @@ async def test_only_the_issuers_signer_signs(client: AsyncClient, outbox: Outbox
     assert (await client.get(issuing, headers=bob)).json()["can_sign"] is False
     refused = await client.post(f"{issuing}/sign", json={"locale": "en"}, headers=bob)
     assert refused.status_code == 403 and refused.json()["detail"] == "not_the_issuers_signer"
+    # Nor settles the draft.
+    draft = await client.put(
+        issuing,
+        json={"claims": {"given_name": "Z"}, "valid_until": "2030-01-01"},
+        headers=bob,
+    )
+    assert draft.status_code == 403 and draft.json()["detail"] == "not_the_issuers_signer"

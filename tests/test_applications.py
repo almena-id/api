@@ -127,6 +127,9 @@ async def test_a_holder_applies_and_the_issuer_decides(client: AsyncClient, outb
     assert state["wallet"] == {**state["wallet"], "purpose": "pair", "answered": True}
     again = await client.post(urlparse(pairing["response_uri"]).path, data={"id_token": "x"})
     assert again.status_code == 409
+    # Paired once: no other wallet takes it over.
+    repair = await client.post(f"{base}/wallet", json={"purpose": "pair"}, headers=secret)
+    assert repair.status_code == 409 and repair.json()["detail"] == "already_paired"
 
     # Present: a verified email, which fills the email field.
     asked = await _ask(client, base, secret, "present")
@@ -209,6 +212,24 @@ async def test_a_holder_applies_and_the_issuer_decides(client: AsyncClient, outb
     )
     assert good.status_code == 200, good.text
     assert good.json()["answers"]["given_name"] == "Lucía"
+
+    # Complete when asked is not enough: a file removed since leaves it incomplete.
+    submitting = await client.post(f"{base}/wallet", json={"purpose": "submit"}, headers=secret)
+    assert submitting.status_code == 200, submitting.text
+    removed = await client.delete(f"{base}/files/id_scan", headers=secret)
+    assert removed.status_code == 204, removed.text
+    stale = await _request(client, submitting.json()["deep_link"])
+    late = await client.post(
+        urlparse(stale["response_uri"]).path, json={"signature": _sign_submission(holder, stale)}
+    )
+    assert late.status_code == 409 and late.json()["detail"] == "answers_incomplete"
+    again = await client.post(
+        f"{base}/files",
+        data={"key": "id_scan"},
+        files={"file": ("id.pdf", b"%PDF-1.7 scan", "application/pdf")},
+        headers=secret,
+    )
+    assert again.status_code == 200, again.text
 
     # QR 2: the wallet reads what it signs, checks the digest and signs it.
     submit = await _ask(client, base, secret, "submit")

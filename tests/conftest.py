@@ -13,6 +13,8 @@ from registry_api.dns_proof import get_txt_lookup
 from registry_api.mail import Mailer, get_mailer
 from registry_api.main import app
 from registry_api.models import Base
+from registry_api.vault import get_vault
+from registry_api.vault.memory import MemoryVault
 
 
 class Outbox(Mailer):
@@ -55,6 +57,14 @@ async def database() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     app.dependency_overrides[get_session] = override
     yield sessionmaker
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def vault() -> MemoryVault:
+    """A vault in memory per test, in place of OpenBao."""
+    store = MemoryVault()
+    app.dependency_overrides[get_vault] = lambda: store
+    return store
 
 
 @pytest.fixture

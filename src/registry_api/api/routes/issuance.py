@@ -7,7 +7,8 @@
    one asking may sign it — the issuer's signer, with a wallet whose key the
    issuer's DID lists.
 2. ``PUT …/issuance``: the claims the issuer settles on and until when, each
-   checked against its field; kept as the draft to sign. Any member.
+   checked against its field; kept as the draft to sign. The issuer's signer
+   only, as for signing it.
 3. ``POST …/issuance/sign``: a wallet request (``purpose: sign``, kind
    `credential`) for the signer's wallet to sign the SD-JWT VC built from the
    draft; its answer issues the credential (`routes.wallet`).
@@ -110,6 +111,7 @@ class IssuanceIn(BaseModel):
     "/{application_id}/issuance",
     summary="Settle the credential's claims and validity (the draft its signer signs)",
     responses={
+        status.HTTP_403_FORBIDDEN: {"description": "`not_the_issuers_signer`"},
         status.HTTP_409_CONFLICT: {"description": "`not_accepted`, `already_issued`"},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "description": "`{code: claims_invalid, errors: {claim: problem}}`, "
@@ -118,9 +120,15 @@ class IssuanceIn(BaseModel):
     },
 )
 async def save_draft(
-    tenant_id: TenantId, application_id: uuid.UUID, body: IssuanceIn, db: DbSession
+    tenant_id: TenantId,
+    application_id: uuid.UUID,
+    body: IssuanceIn,
+    session: CurrentSession,
+    db: DbSession,
 ) -> dict[str, Any]:
-    item, _ = await _accepted(db, tenant_id, application_id)
+    item, issuer = await _accepted(db, tenant_id, application_id)
+    if await _signing_key(db, issuer, session.user_id) is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_the_issuers_signer")
     if body.valid_until <= datetime.now(UTC).date():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="valid_until_invalid")
     kind = credential_catalog.BY_ID[item.credential_type]

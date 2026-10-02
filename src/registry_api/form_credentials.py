@@ -84,7 +84,8 @@ async def stored(db: AsyncSession, requests: list[CredentialRequest]) -> list[di
         if not KEY.match(key):
             raise _refuse("credential_key_invalid")
         offered = [claim.field for claim in item.claims]
-        claims = request.claims or offered
+        # Left out, every claim of the type; sent, at least one.
+        claims = offered if request.claims is None else request.claims
         if not claims or len(set(claims)) != len(claims) or set(claims) - set(offered):
             raise _refuse("credential_claims_invalid")
         external = item.issuance == "external"
@@ -115,6 +116,8 @@ async def stored(db: AsyncSession, requests: list[CredentialRequest]) -> list[di
         kept.append(entry)
     if len({entry["key"] for entry in kept}) != len(kept):
         raise _refuse("credential_key_duplicate")
+    if len({entry["type"] for entry in kept}) != len(kept):
+        raise _refuse("credential_type_duplicate")
     return kept
 
 

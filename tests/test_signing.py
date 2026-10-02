@@ -3,8 +3,9 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import Outbox
+from tests.conftest import Dns, Outbox
 from tests.fake_wallet import FakeWallet
+from tests.mediators import new_mediator
 from tests.signing import link_wallet, ready, sign
 from tests.test_directory import _sign_in
 
@@ -47,11 +48,10 @@ async def test_one_member_signs(client: AsyncClient, outbox: Outbox, kind: str) 
     assert cleared.json() == {"system": None, "signer": None}
 
 
-async def test_mediators_have_no_signing(client: AsyncClient, outbox: Outbox) -> None:
+async def test_mediators_have_no_signing(client: AsyncClient, outbox: Outbox, dns: Dns) -> None:
     ada, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
-    body = {"name": "Relay", "url": "https://mediator.example.org"}
-    mediator = (await client.post(f"{base}/mediators", json=body, headers=ada)).json()
+    mediator = await new_mediator(client, ada, tenant, dns)
     response = await client.get(f"{base}/mediators/{mediator['id']}/signing", headers=ada)
     assert response.status_code in (404, 422)
 
@@ -85,8 +85,15 @@ async def test_the_signers_key_goes_in_the_document(client: AsyncClient, outbox:
     assert detail["signature"] == "outdated"
     did = detail["did"]
     key = bob_wallet.did.removeprefix("did:key:")
+    agreement = detail["document"]["keyAgreement"][0].removeprefix(f"{did}#")
     assert detail["document"]["verificationMethod"] == [
-        {"id": f"{did}#{key}", "type": "Multikey", "controller": did, "publicKeyMultibase": key}
+        {"id": f"{did}#{key}", "type": "Multikey", "controller": did, "publicKeyMultibase": key},
+        {
+            "id": f"{did}#{agreement}",
+            "type": "Multikey",
+            "controller": did,
+            "publicKeyMultibase": agreement,
+        },
     ]
     assert detail["document"]["assertionMethod"] == [f"{did}#{key}"]
     await sign(client, ada, tenant, issuer["identity"]["id"], admin_wallet)

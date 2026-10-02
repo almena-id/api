@@ -6,8 +6,9 @@ import pytest
 from httpx import AsyncClient
 
 from registry_api.config import get_settings
-from tests.conftest import Outbox
+from tests.conftest import Dns, Outbox
 from tests.fake_wallet import FakeWallet
+from tests.mediators import new_mediator
 from tests.signing import link_wallet, publish, ready, sign
 
 
@@ -131,7 +132,9 @@ async def test_issuers_and_verifiers_never_share_an_identity(
     assert identities["total"] == 3
 
 
-async def test_an_identity_shows_its_did_document(client: AsyncClient, outbox: Outbox) -> None:
+async def test_an_identity_shows_its_did_document(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
     issuer = (await client.post(f"{base}/issuers", json={"name": "Uni"}, headers=headers)).json()
@@ -167,13 +170,25 @@ async def test_an_identity_shows_its_did_document(client: AsyncClient, outbox: O
     did = detail["did"]
     assert did.startswith("did:webvh:Qm") and f":{host}:ids:idn_" in did
     assert detail["signature"] == "signed"
-    # Its tenant controls it, and presents for it with its admins' keys.
+    # Its tenant controls it, and presents for it with its admins' keys; the
+    # messaging key made when it was signed is what messages are encrypted to.
     key = wallet.did.removeprefix("did:key:")
+    agreement = detail["document"]["keyAgreement"][0].removeprefix(f"{did}#")
+    assert agreement.startswith("z6LS")
     assert detail["document"] == {
-        "@context": ["https://www.w3.org/ns/did/v1"],
+        "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
         "id": did,
         "controller": tenant_did,
+        "verificationMethod": [
+            {
+                "id": f"{did}#{agreement}",
+                "type": "Multikey",
+                "controller": did,
+                "publicKeyMultibase": agreement,
+            }
+        ],
         "authentication": [f"{tenant_did}#{key}"],
+        "keyAgreement": [f"{did}#{agreement}"],
     }
 
     # Public once published: the log, and the document under its did:web name.
@@ -191,8 +206,7 @@ async def test_an_identity_shows_its_did_document(client: AsyncClient, outbox: O
     assert web.json()["alsoKnownAs"] == [did]
 
     # A change to what it should publish waits for a signature.
-    body = {"name": "Relay", "url": "https://mediator.example.org"}
-    mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
+    mediator = await new_mediator(client, headers, tenant, dns)
     await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
     await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
     patch = {"mediator_id": mediator["id"]}
@@ -213,17 +227,19 @@ async def test_an_identity_shows_its_did_document(client: AsyncClient, outbox: O
     assert nothing.status_code == 409 and nothing.json()["detail"] == "up_to_date"
 
 
-async def test_the_did_document_names_the_mediator(client: AsyncClient, outbox: Outbox) -> None:
+async def test_the_did_document_names_the_mediator(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
     wallet = await ready(client, headers, tenant)
-    body = {"name": "Relay", "url": "https://mediator.example.org"}
-    mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
+    mediator = await new_mediator(client, headers, tenant, dns)
     await client.patch(base, json={"mediator_id": mediator["id"]}, headers=headers)
     identity_id = (await client.get(base, headers=headers)).json()["identity"]["id"]
-    # Nothing routes through a mediator whose DID does not resolve yet.
+    # Nothing routes through a mediator whose DID does not resolve yet; the
+    # domain it listens on is the tenant's, named in its document.
     detail = (await client.get(f"{base}/identities/{identity_id}", headers=headers)).json()
-    assert "service" not in detail["document"]
+    assert [s["type"] for s in detail["document"]["service"]] == ["LinkedDomains"]
 
     await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
     await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
@@ -232,7 +248,7 @@ async def test_the_did_document_names_the_mediator(client: AsyncClient, outbox: 
     ]
     detail = (await client.get(f"{base}/identities/{identity_id}", headers=headers)).json()
     assert detail["used_by"][0]["kind"] == "tenant"
-    assert detail["document"]["service"] == [
+    assert [s for s in detail["document"]["service"] if s["type"] != "LinkedDomains"] == [
         {
             "id": f"{detail['document']['id']}#didcomm",
             "type": "DIDCommMessaging",
@@ -279,11 +295,12 @@ async def test_identities_stay_in_their_tenant(client: AsyncClient, outbox: Outb
 
 
 @pytest.mark.parametrize("kind", ["issuers", "verifiers"])
-async def test_one_opens_and_changes(client: AsyncClient, outbox: Outbox, kind: str) -> None:
+async def test_one_opens_and_changes(
+    client: AsyncClient, outbox: Outbox, dns: Dns, kind: str
+) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
-    body = {"name": "Relay", "url": "https://mediator.example.org"}
-    mediator = (await client.post(f"{base}/mediators", json=body, headers=headers)).json()
+    mediator = await new_mediator(client, headers, tenant, dns)
     created = (await client.post(f"{base}/{kind}", json={"name": "Uni"}, headers=headers)).json()
     url = f"{base}/{kind}/{created['id']}"
 

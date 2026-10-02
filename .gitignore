@@ -23,3 +23,6 @@ htmlcov/
 # Task checksums
 .task/
 .fake-wallet-key
+
+# OpenBao: its unseal key and root token (task openbao)
+.openbao-keys.json*

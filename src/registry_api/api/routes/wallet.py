@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import dids, issuance, signing_flows, wallet, webvh
+from registry_api import dids, issuance, messaging_keys, signing_flows, wallet, webvh
 from registry_api.api.routes.account import LinkResult, settle_taken
 from registry_api.api.routes.auth import (
     CurrentSession,
@@ -64,6 +64,7 @@ from registry_api.models import (
     WalletRequest,
 )
 from registry_api.security import digest, new_token
+from registry_api.vault import Vault, VaultError, get_vault
 
 router = APIRouter(prefix="/auth/wallet", tags=["wallet"])
 signing = APIRouter(prefix="/tenants/{tenant_id}", tags=["wallet"])
@@ -496,6 +497,10 @@ async def request_result(
         status.HTTP_409_CONFLICT: {
             "description": "`up_to_date`: nothing to sign; `no_signers`: no signer has a wallet"
         },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "`vault_unavailable`: an issuer's or verifier's messaging key "
+            "could not be made"
+        },
     },
 )
 async def sign_identity(
@@ -504,12 +509,24 @@ async def sign_identity(
     body: LocaleIn,
     session: CurrentSession,
     db: DbSession,
+    vault: Annotated[Vault, Depends(get_vault)],
 ) -> RequestOut:
     identity = await db.get(Identity, identity_id)
     if identity is None or identity.tenant_id != tenant_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="identity_not_found")
     if not await signing_flows.signs(db, await db.get_one(Tenant, tenant_id), session.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
+    # Signing an issuer or a verifier is when its messaging key is made, so
+    # the entry signed now is the one that lists it.
+    item = await messaging_keys.owner(db, identity.id)
+    if item is not None and identity.agreement_key is None:
+        try:
+            await messaging_keys.ensure(vault, item, identity)
+        except VaultError:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, detail="vault_unavailable"
+            ) from None
+        await db.commit()
     try:
         entry = await dids.next_entry(db, get_settings().did_url, identity)
     except webvh.LogError as error:

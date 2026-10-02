@@ -13,10 +13,12 @@ The catalogue — and the endorsement — name the tenant by its DID, never by
 the tenant's own name, which starts as "Tenant of {email}".
 
 Deleting one deletes its identity too (it is its own, never shared): its DID
-stops resolving for good. A mediator's users are left without one.
+stops resolving for good, and an issuer's or verifier's keys leave the vault.
+A mediator's users are left without one.
 """
 
 import base64
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
@@ -25,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import and_, or_, select, update
 
-from registry_api import credentials, dids, signing_flows
+from registry_api import credentials, dids, messaging_keys, signing_flows
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import ItemDetail, TenantId, item_detail
 from registry_api.api.routes.members import admin_of
@@ -37,6 +39,9 @@ from registry_api.api.routes.wallet import (
     new_sign_request,
 )
 from registry_api.models import Identity, Issuer, Mediator, Tenant, Verifier
+from registry_api.vault import Vault, VaultError, get_vault
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["publication"])
 catalog = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -167,7 +172,13 @@ async def unpublish(
     summary="Delete an issuer, verifier or mediator, and its identity",
     responses={403: {"description": "`not_admin`"}},
 )
-async def delete(tenant_id: AdminTenant, kind: Kind, item_id: uuid.UUID, db: DbSession) -> Response:
+async def delete(
+    tenant_id: AdminTenant,
+    kind: Kind,
+    item_id: uuid.UUID,
+    db: DbSession,
+    vault: Annotated[Vault, Depends(get_vault)],
+) -> Response:
     item = await _owned(db, kind, tenant_id, item_id)
     identity = await db.get(Identity, item.identity_id)
     if isinstance(item, Mediator):
@@ -181,6 +192,13 @@ async def delete(tenant_id: AdminTenant, kind: Kind, item_id: uuid.UUID, db: DbS
     if identity is not None:
         await db.delete(identity)
     await db.commit()
+    # After the commit: a key left behind by a vault that failed is harmless
+    # (nothing names it any more); an item left without its key is not.
+    if isinstance(item, Issuer | Verifier):
+        try:
+            await messaging_keys.forget(vault, tenant_id, messaging_keys.kind_of(item), item.id)
+        except VaultError:
+            logger.warning("vault_keys_left", extra={"kind": kind, "item_id": str(item.id)})
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

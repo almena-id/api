@@ -251,7 +251,7 @@ async def list_forms(tenant_id: TenantId, db: DbSession) -> list[FormOut]:
             "description": "`fields_required` (no field nor credential), "
             "`field_unknown`, `field_rename_invalid`, `field_key_invalid`, "
             "`field_key_duplicate`, `field_narrow_invalid`, `credential_unknown`, "
-            "`credential_key_invalid`, `credential_key_duplicate`, "
+            "`credential_key_invalid`, `credential_key_duplicate`, `credential_type_duplicate`, "
             "`credential_claims_invalid` or `credential_trust_invalid`"
         },
     },

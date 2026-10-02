@@ -21,7 +21,8 @@ src/registry_api/
                      its identity is the domain's DID (did:web:almena.id); its public
                      mediator is every new tenant's default (`default_mediator`)
   dids.py            identities' did:webvh DIDs (`{did_url}/ids/{slug}`, almena.id): the document
-                     each should publish, its signed log, the next entry to sign, its status
+                     each should publish (built in phases: it names only what exists
+                     already), its signed log, the next entry to sign, its status
   credentials.py     a tenant's membership credential for its issuers, verifiers, mediators
   signing_flows.py   the signing engine: who signs as a tenant, by its flow (`any_admin`, `single_user`)
   credential_catalog.py  Almena's credential types: claims named as catalogue fields, how each
@@ -44,6 +45,15 @@ src/registry_api/
                      names, JSON Schema, value domains from ISO lists via pycountry,
                      labels per language); Almena's fields go here; a tenant's own are
                      `custom_fields`
+  messaging_keys.py  issuers' and verifiers' messaging keys (X25519): made in the vault when
+                     their signer first signs them, the public half on `Identity.agreement_key`
+                     (their document's `keyAgreement`); deleted with them
+  vault/             the vault keeping the platform's secrets, behind a swappable provider:
+                     base.py (`Vault`, the interface, and portable paths), paths.py (where
+                     each secret lives: `tenants/{tenant_id}/{kind}/{id}/{name}`, by id),
+                     openbao.py (KV v2 + AppRole), memory.py (tests); `get_vault` picks
+                     the provider by `REGISTRY_VAULT_PROVIDER`. A new service is a new
+                     module implementing `Vault`; nothing outside vault/ names a provider
   tenant_health.py   a tenant's health: the checks it must pass to operate (name, mediator,
                      signing flow) and its score; new checks go here
   webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked, never made)
@@ -83,6 +93,8 @@ src/registry_api/
                      auth.py's `_sign_in` turns pending invitations into membership
   models/            SQLAlchemy models; import each one in models/__init__.py
 migrations/          Alembic (env.py reads the settings and models)
+openbao/             OpenBao under Compose: config.hcl (Raft storage, audit to stdout) and
+                     setup.sh, the API's mount, policy and AppRole (`task openbao:setup`)
 tests/               pytest (async, httpx ASGITransport)
 ```
 
@@ -100,4 +112,8 @@ tests/               pytest (async, httpx ASGITransport)
   reviewed by hand; never `Base.metadata.create_all` outside tests.
 - New settings get a `REGISTRY_` variable in `config.py`, `.env.example`,
   `compose.yml` (when the container needs it) and the README table.
+- The API validates everything it is sent, whatever the portal checked first:
+  required fields, lengths, formats, allowed values, cross-field rules and what
+  an item's state allows. A rule the portal checks is a rule here too, with a
+  test; the portal's checks only spare people a round trip.
 - New endpoints come with tests and keep the README endpoint table current.

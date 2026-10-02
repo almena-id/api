@@ -25,7 +25,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_api import dids, logs, mediators
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.config import get_settings
-from registry_api.models import Identity, Issuer, Mediator, Tenant, TenantMember, Verifier
+from registry_api.models import (
+    Identity,
+    Issuer,
+    Mediator,
+    Tenant,
+    TenantDomain,
+    TenantMember,
+    Verifier,
+)
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["directory"])
 
@@ -77,8 +85,10 @@ class DescribedIn(NamedIn):
 
 
 class MediatorIn(NamedIn):
-    # Where it listens: https (plain http only on loopback).
-    url: str = Field(min_length=1, max_length=2048)
+    # Where it listens: `https://{subdomain}.{domain}`, the domain one of the
+    # tenant's verified ones.
+    subdomain: str = Field(min_length=1, max_length=200)
+    domain_id: uuid.UUID
     # Offered to every tenant (once published), not only this one.
     public: bool = False
 
@@ -339,6 +349,22 @@ def _endpoint(url: str) -> str:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=error.code) from None
 
 
+async def _address(
+    db: DbSession, tenant_id: uuid.UUID, subdomain: str, domain_id: uuid.UUID
+) -> str:
+    """A new mediator's address: the subdomain typed of one of the tenant's
+    verified domains."""
+    domain = await db.get(TenantDomain, domain_id)
+    if domain is None or domain.tenant_id != tenant_id:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="domain_not_found")
+    if domain.verified_at is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="domain_unverified")
+    try:
+        return mediators.address(subdomain, domain.domain)
+    except mediators.MediatorError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=error.code) from None
+
+
 @router.get("/issuers", summary="The tenant's issuers, newest first")
 async def list_issuers(
     tenant_id: TenantId, db: DbSession, limit: Limit = 20, cursor: Cursor = None
@@ -483,11 +509,14 @@ async def list_mediators(
     status_code=status.HTTP_201_CREATED,
     summary="Register a mediator; the registry gives it its identity",
     responses={
-        422: {"description": "`mediator_invalid`, `mediator_insecure` (plain off loopback)"}
+        422: {
+            "description": "`domain_not_found` (not the tenant's), `domain_unverified`, "
+            "`subdomain_invalid`"
+        }
     },
 )
 async def create_mediator(tenant_id: TenantId, body: MediatorIn, db: DbSession) -> ItemOut:
-    url = _endpoint(body.url)
+    url = await _address(db, tenant_id, body.subdomain, body.domain_id)
     identity_id = await _identity_for(db, tenant_id, body.name)
     return await _create(
         db,

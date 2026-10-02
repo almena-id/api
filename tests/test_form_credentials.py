@@ -138,6 +138,12 @@ async def test_a_credential_request_must_hold(client: AsyncClient, outbox: Outbo
     assert await refused([{"type": "pid", "claims": ["email", "email"]}]) == (
         "credential_claims_invalid"
     )
+    # Sent empty is none at all, not every claim.
+    assert await refused([{"type": "pid", "claims": []}]) == "credential_claims_invalid"
+    # A type is asked for once, whatever its key.
+    assert await refused([{"type": "pid"}, {"type": "pid", "key": "pid2"}]) == (
+        "credential_type_duplicate"
+    )
     # The PID is trusted by its framework only; Almena's types never by it.
     assert await refused([{"type": "pid", "trust": "registry"}]) == "credential_trust_invalid"
     assert await refused([{"type": "membership", "trust": "framework"}]) == (

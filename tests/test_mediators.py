@@ -1,33 +1,24 @@
 import json
+import uuid
 from typing import cast
 
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import Outbox
+from tests.conftest import Dns, Outbox
+from tests.mediators import new_mediator, verified_domain
 from tests.signing import publish, ready, sign
 from tests.test_directory import _sign_in
 
 
-async def _mediator(
-    client: AsyncClient, headers: dict[str, str], tenant: str, url: str = "mediator.example.org"
-) -> dict[str, object]:
-    response = await client.post(
-        f"/api/v1/tenants/{tenant}/mediators", json={"name": "Relay", "url": url}, headers=headers
-    )
-    assert response.status_code == 201, response.text
-    body: dict[str, object] = response.json()
-    return body
-
-
 async def test_a_mediator_gets_an_identity_that_publishes_its_address(
-    client: AsyncClient, outbox: Outbox
+    client: AsyncClient, outbox: Outbox, dns: Dns
 ) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
-    mediator = await _mediator(client, headers, tenant, "Mediator.Example.org/didcomm/")
-    # `https://` is added, the host lowercased, the trailing slash dropped.
-    assert mediator["url"] == "https://mediator.example.org/didcomm"
+    mediator = await new_mediator(client, headers, tenant, dns, subdomain=" EU.Mediator. ")
+    # A subdomain of the tenant's domain, lowercased.
+    assert mediator["url"] == "https://eu.mediator.example.org"
     identity = mediator["identity"]
     assert isinstance(identity, dict) and identity["name"] == "Relay"
 
@@ -37,11 +28,48 @@ async def test_a_mediator_gets_an_identity_that_publishes_its_address(
     detail = (await client.get(f"{base}/identities/{identity['id']}", headers=headers)).json()
     assert detail["used_by"] == [{"kind": "mediator", "id": mediator["id"], "name": "Relay"}]
     assert detail["document"]["service"][0]["serviceEndpoint"] == {
-        "uri": "https://mediator.example.org/didcomm",
+        "uri": "https://eu.mediator.example.org",
         "accept": ["didcomm/v2"],
     }
     opened = (await client.get(f"{base}/mediators/{mediator['id']}", headers=headers)).json()
     assert opened["did"] == detail["did"]
+
+
+@pytest.mark.parametrize("typed", [" ", ".", "-relay", "relay-", "re_lay", "a..b", "x" * 64])
+async def test_the_subdomain_must_be_a_valid_one(
+    client: AsyncClient, outbox: Outbox, dns: Dns, typed: str
+) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@example.org")
+    body = {
+        "name": "Relay",
+        "subdomain": typed,
+        "domain_id": await verified_domain(client, headers, tenant, dns),
+    }
+    response = await client.post(f"/api/v1/tenants/{tenant}/mediators", json=body, headers=headers)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "subdomain_invalid"
+
+
+async def test_the_domain_must_be_the_tenants_and_verified(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
+    ada, adas = await _sign_in(client, outbox, "ada@example.org")
+    bob, bobs = await _sign_in(client, outbox, "bob@example.org")
+    url = f"/api/v1/tenants/{adas}/mediators"
+
+    async def refused(domain_id: str) -> str:
+        body = {"name": "Relay", "subdomain": "relay", "domain_id": domain_id}
+        response = await client.post(url, json=body, headers=ada)
+        assert response.status_code == 422
+        detail: str = response.json()["detail"]
+        return detail
+
+    assert await refused(str(uuid.uuid4())) == "domain_not_found"
+    assert await refused(await verified_domain(client, bob, bobs, dns)) == "domain_not_found"
+    added = await client.post(
+        f"/api/v1/tenants/{adas}/domains", json={"domain": "acme.com"}, headers=ada
+    )
+    assert await refused(added.json()["id"]) == "domain_unverified"
 
 
 @pytest.mark.parametrize(
@@ -53,28 +81,42 @@ async def test_a_mediator_gets_an_identity_that_publishes_its_address(
         ("https://user:pw@mediator.example.org", "mediator_invalid"),
         ("https://mediator.example.org/?x=1", "mediator_invalid"),
         ("https://", "mediator_invalid"),
+        # Within 2048 as typed, beyond it once `https://` is added.
+        ("mediator.example.org/" + "a" * 2027, "mediator_invalid"),
     ],
 )
-async def test_an_address_must_be_secure(
-    client: AsyncClient, outbox: Outbox, typed: str, code: str
+async def test_a_changed_address_must_be_secure(
+    client: AsyncClient, outbox: Outbox, dns: Dns, typed: str, code: str
 ) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
-    response = await client.post(
-        f"/api/v1/tenants/{tenant}/mediators", json={"name": "Relay", "url": typed}, headers=headers
+    mediator = await new_mediator(client, headers, tenant, dns)
+    response = await client.patch(
+        f"/api/v1/tenants/{tenant}/mediators/{mediator['id']}",
+        json={"url": typed},
+        headers=headers,
     )
     assert response.status_code == 422
     assert response.json()["detail"] == code
 
 
-async def test_plain_addresses_are_fine_on_loopback(client: AsyncClient, outbox: Outbox) -> None:
+async def test_plain_addresses_are_fine_on_loopback(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
-    mediator = await _mediator(client, headers, tenant, "http://localhost:8080")
-    assert mediator["url"] == "http://localhost:8080"
+    mediator = await new_mediator(client, headers, tenant, dns)
+    changed = await client.patch(
+        f"/api/v1/tenants/{tenant}/mediators/{mediator['id']}",
+        json={"url": "http://localhost:8080"},
+        headers=headers,
+    )
+    assert changed.json()["url"] == "http://localhost:8080"
 
 
-async def test_renaming_and_moving_keep_the_did(client: AsyncClient, outbox: Outbox) -> None:
+async def test_renaming_and_moving_keep_the_did(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
-    mediator = await _mediator(client, headers, tenant)
+    mediator = await new_mediator(client, headers, tenant, dns)
     url = f"/api/v1/tenants/{tenant}/mediators/{mediator['id']}"
     before = (await client.get(url, headers=headers)).json()
 
@@ -92,11 +134,13 @@ async def test_renaming_and_moving_keep_the_did(client: AsyncClient, outbox: Out
     assert blank.status_code == 422 and blank.json()["detail"] == "name_required"
 
 
-async def test_issuers_route_through_their_mediator(client: AsyncClient, outbox: Outbox) -> None:
+async def test_issuers_route_through_their_mediator(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}"
     wallet = await ready(client, headers, tenant)
-    mediator = await _mediator(client, headers, tenant)
+    mediator = await new_mediator(client, headers, tenant, dns)
     identity = cast(dict[str, str], mediator["identity"])
     await sign(client, headers, tenant, identity["id"], wallet)
     did = (await client.get(f"{base}/mediators/{mediator['id']}", headers=headers)).json()["did"]
@@ -123,10 +167,12 @@ async def test_issuers_route_through_their_mediator(client: AsyncClient, outbox:
     assert plain["mediator"] is None
 
 
-async def test_mediators_stay_in_their_tenant(client: AsyncClient, outbox: Outbox) -> None:
+async def test_mediators_stay_in_their_tenant(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
     ada, ada_tenant = await _sign_in(client, outbox, "ada@example.org")
     bob, bob_tenant = await _sign_in(client, outbox, "bob@example.org")
-    mediator = await _mediator(client, ada, ada_tenant)
+    mediator = await new_mediator(client, ada, ada_tenant, dns)
 
     body = {"name": "Bob's", "mediator_id": mediator["id"]}
     response = await client.post(f"/api/v1/tenants/{bob_tenant}/issuers", json=body, headers=bob)

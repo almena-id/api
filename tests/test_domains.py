@@ -43,6 +43,9 @@ async def test_a_domain_is_added_proved_and_named_in_the_did(
     dns.records[record["name"]] = [record["value"]]
     checked = await client.post(f"{base}/{added['id']}/check", headers=headers)
     assert checked.status_code == 200 and checked.json()["verified"] is True
+    # Verified once: there is nothing left to check.
+    twice = await client.post(f"{base}/{added['id']}/check", headers=headers)
+    assert twice.status_code == 409 and twice.json()["detail"] == "domain_verified"
     second = await _add(client, headers, base, "acme.org")
     dns.records[second["dns_record"]["name"]] = [second["dns_record"]["value"]]
     await client.post(f"{base}/{second['id']}/check", headers=headers)

@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     smtp_starttls: bool = False
     mail_from: str = "Almena Registry <no-reply@almena.id>"
 
+    # The vault keeping the platform's secrets (issuers', verifiers' and
+    # mediators' keys): which service, and how to reach it. See registry_api.vault.
+    vault_provider: Literal["openbao"] = "openbao"
+    openbao_addr: str = "http://localhost:8200"
+    # The KV v2 mount holding them, and the AppRole the API signs in with.
+    openbao_mount: str = "almena"
+    openbao_role_id: str = "registry-api"
+    openbao_secret_id: SecretStr = SecretStr("")
+
     # Public origin of the portal: providers send the browser back to
     # `{portal_url}/auth/{provider}/callback`, which is what each one registers.
     portal_url: str = "https://registry.almena.id"

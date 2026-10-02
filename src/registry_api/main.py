@@ -13,12 +13,14 @@ from registry_api.api.routes import did_documents, fields, health, home, well_kn
 from registry_api.config import get_settings
 from registry_api.db import get_engine
 from registry_api.logs import REQUEST_ID_HEADER, RequestContextMiddleware, configure_logging
+from registry_api.vault import close_vault
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     await get_engine().dispose()
+    await close_vault()
 
 
 def create_app() -> FastAPI:

@@ -60,7 +60,7 @@ def value_of(
             limit = narrow.get("max_length") or item.max_length
             if limit and len(text) > limit:
                 return None, "range"
-            if item.pattern and not re.fullmatch(item.pattern.strip("^$"), text):
+            if item.pattern and not re.fullmatch(item.pattern, text):
                 return None, "format"
             return text, None
         case "email":

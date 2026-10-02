@@ -30,6 +30,10 @@ class Identity(TimestampMixin, Base):
     # published, cleared when it is taken back. And until when it holds.
     presentation: Mapped[str | None] = mapped_column(Text)
     endorsed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # An issuer's or verifier's messaging key (X25519, a multikey): the public
+    # half, listed under `keyAgreement`; the private one is in the vault (see
+    # `registry_api.messaging_keys`). Set when its signer first signs it.
+    agreement_key: Mapped[str | None] = mapped_column(String(64))
 
 
 class DidLogEntry(TimestampMixin, Base):

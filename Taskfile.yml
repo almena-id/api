@@ -6,6 +6,7 @@ dotenv: [".env"]
 vars:
   IMAGE: almena-api:dev
   PORT: '{{.REGISTRY_API_PORT | default "8000"}}'
+  OPENBAO_PORT: '{{.REGISTRY_OPENBAO_PORT | default "8200"}}'
 
 tasks:
   default:
@@ -15,13 +16,14 @@ tasks:
     silent: true
 
   init:
-    desc: Create .env from .env.example with fresh database, OpenObserve and RabbitMQ passwords (an existing .env is left untouched)
+    desc: Create .env from .env.example with fresh database, OpenObserve and RabbitMQ passwords and OpenBao secret id (an existing .env is left untouched)
     cmds:
       - cp .env.example .env
       - sed -i.bak "s/^REGISTRY_DB_PASSWORD=$/REGISTRY_DB_PASSWORD=$(openssl rand -hex 24)/" .env && rm .env.bak
       # OpenObserve wants every kind of character: the prefix gives them, the hex the entropy.
       - sed -i.bak "s/^REGISTRY_OPENOBSERVE_PASSWORD=$/REGISTRY_OPENOBSERVE_PASSWORD=Aa1-$(openssl rand -hex 24)/" .env && rm .env.bak
       - sed -i.bak "s/^REGISTRY_RABBITMQ_PASSWORD=$/REGISTRY_RABBITMQ_PASSWORD=$(openssl rand -hex 24)/" .env && rm .env.bak
+      - sed -i.bak "s/^REGISTRY_OPENBAO_SECRET_ID=$/REGISTRY_OPENBAO_SECRET_ID=$(openssl rand -hex 24)/" .env && rm .env.bak
     status:
       - test -f .env
 
@@ -53,6 +55,64 @@ tasks:
     cmds:
       - docker compose up --detach --wait rabbitmq
 
+  openbao:
+    desc: Start OpenBao in Docker (for task dev), unseal it (initializing it the first time) and provision it for the API; its UI is at http://localhost:8200/ui
+    cmds:
+      - docker compose up --detach --wait openbao
+      - task: openbao:unseal
+      - task: openbao:setup
+
+  openbao:unseal:
+    desc: Unseal the running OpenBao; the first time, initialize it and keep its unseal key and root token in .openbao-keys.json
+    cmds:
+      # `bao operator init -status` exits 0 initialized, 2 not yet, 1 on error.
+      # One key share: the development setup; a production one splits the key
+      # among people or unseals itself from a KMS.
+      - |
+        status=0
+        docker compose exec -T openbao bao operator init -status > /dev/null || status=$?
+        if [ "$status" -eq 2 ]; then
+          if [ -e .openbao-keys.json ]; then
+            echo "OpenBao is not initialized but .openbao-keys.json exists: its keys belong to a deleted volume. Remove it and run again." >&2
+            exit 1
+          fi
+          # Readable by its owner alone before the keys go in.
+          : > .openbao-keys.json.tmp
+          chmod 600 .openbao-keys.json.tmp
+          docker compose exec -T openbao bao operator init -key-shares=1 -key-threshold=1 -format=json > .openbao-keys.json.tmp
+          mv .openbao-keys.json.tmp .openbao-keys.json
+          echo "OpenBao initialized: unseal key and root token in .openbao-keys.json"
+        elif [ "$status" -ne 0 ]; then
+          exit "$status"
+        fi
+      # `bao status` exits 2 while sealed. The key goes to the HTTP API in the
+      # body, through a pipe: never as an argument, where `ps` would show it.
+      - |
+        status=0
+        docker compose exec -T openbao bao status > /dev/null || status=$?
+        if [ "$status" -eq 2 ]; then
+          uv run --no-project python -c "import json; print(json.dumps({'key': json.load(open('.openbao-keys.json'))['unseal_keys_b64'][0]}))" \
+            | curl --fail --silent --show-error --output /dev/null --request PUT --data @- http://127.0.0.1:{{.OPENBAO_PORT}}/v1/sys/unseal
+          echo "OpenBao unsealed"
+        elif [ "$status" -ne 0 ]; then
+          exit "$status"
+        fi
+
+  openbao:setup:
+    desc: Provision the running, unsealed OpenBao for the API (its mount, policy and AppRole); safe to run again
+    cmds:
+      - |
+        if [ -z "${REGISTRY_OPENBAO_SECRET_ID:-}" ]; then
+          echo "REGISTRY_OPENBAO_SECRET_ID is empty: add one to .env (openssl rand -hex 24)." >&2
+          exit 1
+        fi
+        token=$(uv run --no-project python -c "import json; print(json.load(open('.openbao-keys.json'))['root_token'])")
+        {
+          printf "export BAO_TOKEN='%s' MOUNT='%s' ROLE_ID='%s' SECRET_ID='%s'\n" \
+            "$token" "${REGISTRY_OPENBAO_MOUNT:-almena}" "${REGISTRY_OPENBAO_ROLE_ID:-registry-api}" "$REGISTRY_OPENBAO_SECRET_ID"
+          cat openbao/setup.sh
+        } | docker compose exec -T openbao sh
+
   db:migrate:
     desc: Apply the pending migrations to the database (starts PostgreSQL in Docker)
     deps: [install, db]
@@ -80,16 +140,6 @@ tasks:
       - docker compose exec postgres psql --username={{.REGISTRY_DB_USER | default "registry"}} --dbname={{.REGISTRY_DB_NAME | default "registry"}}
     interactive: true
 
-  root:
-    desc: 'Create the root tenant (Almena) once, with its first admin (task root -- --admin you@almena.id)'
-    deps: [db:migrate]
-    requires:
-      vars: [CLI_ARGS]
-    env:
-      REGISTRY_DB_HOST: 127.0.0.1
-    cmds:
-      - uv run registry-api init-root {{.CLI_ARGS}}
-
   wallet:
     desc: "Answer a wallet request as a stand-in wallet (task wallet -- 'almena://auth?request_uri=…')"
     deps: [install]
@@ -99,8 +149,8 @@ tasks:
       - uv run python -m tests.fake_wallet {{.CLI_ARGS}}
 
   dev:
-    desc: Run the API locally with auto-reload against PostgreSQL, Mailpit, OpenObserve and RabbitMQ in Docker
-    deps: [db:migrate, mail, openobserve, rabbitmq]
+    desc: Run the API locally with auto-reload against PostgreSQL, Mailpit, OpenObserve, RabbitMQ and OpenBao in Docker
+    deps: [db:migrate, mail, openobserve, rabbitmq, openbao]
     env:
       REGISTRY_DB_HOST: 127.0.0.1
       REGISTRY_LOG_LEVEL: '{{.REGISTRY_LOG_LEVEL | default "DEBUG"}}'
@@ -143,8 +193,10 @@ tasks:
       - docker compose build
 
   up:
-    desc: Start the API and PostgreSQL in Docker (detached), migrate, and wait until healthy
+    desc: Start the API and its services in Docker (detached), migrate, wait until healthy and unseal OpenBao
     cmds:
+      # OpenBao first: the API signs in to it as soon as it starts.
+      - task: openbao
       - docker compose up --build --detach --wait
 
   down:
@@ -153,10 +205,12 @@ tasks:
       - docker compose down
 
   down:volume:
-    desc: Stop and remove the Docker containers and their volumes (deletes the database, the indexed logs and the broker's queues)
-    prompt: Delete the database, OpenObserve and RabbitMQ volumes? All their data will be lost.
+    desc: Stop and remove the Docker containers and their volumes (deletes the database, the indexed logs, the broker's queues and OpenBao's keys)
+    prompt: Delete the database, OpenObserve, RabbitMQ and OpenBao volumes? All their data, the keys in OpenBao included, will be lost.
     cmds:
       - docker compose down --volumes --remove-orphans
+      # Its unseal key and root token open nothing any more.
+      - rm -f .openbao-keys.json
 
   logs:
     desc: Follow the API's container logs
@@ -184,13 +238,13 @@ tasks:
       - docker image rm -f {{.IMAGE}}
 
   clean:all:
-    desc: Leave the repository as cloned — clean, plus the containers and their volumes, .env, the fake wallet key, coverage output and the Task checksums
-    prompt: Remove the containers and volumes (database, OpenObserve, RabbitMQ), .env and the fake wallet key? All their data will be lost.
+    desc: Leave the repository as cloned — clean, plus the containers and their volumes, .env, OpenBao's keys, the fake wallet key, coverage output and the Task checksums
+    prompt: Remove the containers and volumes (database, OpenObserve, RabbitMQ, OpenBao), .env, OpenBao's keys and the fake wallet key? All their data will be lost.
     cmds:
       # By the project's name, away from compose.yml: it needs no .env, so a
       # second run, or one after .env is gone, still works.
       - cd / && docker compose --project-name almena-api down --volumes --remove-orphans
       - task: clean
-      - rm -rf .task .fake-wallet-key .coverage htmlcov build dist
+      - rm -rf .task .fake-wallet-key .openbao-keys.json .coverage htmlcov build dist
       - find . -name '*.egg-info' -type d -prune -exec rm -rf {} +
       - find . -maxdepth 1 -name '.env*' ! -name '.env.example' -exec rm -f {} +
