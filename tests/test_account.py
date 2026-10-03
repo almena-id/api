@@ -57,16 +57,20 @@ async def test_ways_in_are_linked_and_unlinked(
 ) -> None:
     ada = await _sign_in(client, outbox, "ada@example.org")
     ways = (await client.get("/api/v1/auth/me/ways-in", headers=ada)).json()
-    assert ways == {"email": "ada@example.org", "accounts": []}
+    assert ways == {"email": "ada@example.org", "accounts": [], "removable": False}
 
     assert (await _link_google(client, ada, email="other@example.org"))["status"] == "linked"
-    accounts = (await client.get("/api/v1/auth/me/ways-in", headers=ada)).json()["accounts"]
+    ways = (await client.get("/api/v1/auth/me/ways-in", headers=ada)).json()
+    accounts = ways["accounts"]
     assert [(a["provider"], a["email"]) for a in accounts] == [("google", "other@example.org")]
+    assert ways["removable"] is True
 
     # The email can go while Google remains; then Google is the last way in.
     assert (await client.delete("/api/v1/auth/me/email", headers=ada)).status_code == 204
     me = (await client.get("/api/v1/auth/me", headers=ada)).json()
     assert me["email"] is None
+    ways = (await client.get("/api/v1/auth/me/ways-in", headers=ada)).json()
+    assert ways["removable"] is False
     last = await client.delete(f"/api/v1/auth/me/accounts/{accounts[0]['id']}", headers=ada)
     assert last.status_code == 409 and last.json()["detail"] == "last_way_in"
 

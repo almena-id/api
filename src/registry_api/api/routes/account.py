@@ -75,6 +75,8 @@ class LinkedAccount(BaseModel):
 class WaysIn(BaseModel):
     email: str | None
     accounts: list[LinkedAccount]
+    # Whether one may be unlinked: never the last (`last_way_in`).
+    removable: bool
 
 
 class EmailLink(BaseModel):
@@ -111,6 +113,7 @@ async def _ways_in(db: AsyncSession, user: User) -> WaysIn:
             )
             for a in accounts
         ],
+        removable=await _count_ways_in(db, user) > 1,
     )
 
 

@@ -99,7 +99,7 @@ async def test_a_tenant_adds_its_own_fields_and_forms_use_them(
             json={"name": {"en": "X"}, "fields": fields},
             headers=headers,
         )
-        assert bad.status_code == 422 and bad.json()["detail"] == detail
+        assert bad.status_code == 422 and bad.json()["detail"] == {"code": detail, "field": 0}
 
     # A field a form uses stays; one no form uses goes.
     used = await client.delete(f"{base}/{campus['id']}", headers=headers)
@@ -117,7 +117,8 @@ async def test_a_tenant_adds_its_own_fields_and_forms_use_them(
         json={"name": {"en": "X"}, "fields": [{"ref": "custom:campus"}]},
         headers=eve,
     )
-    assert theirs.status_code == 422 and theirs.json()["detail"] == "field_unknown"
+    assert theirs.status_code == 422
+    assert theirs.json()["detail"] == {"code": "field_unknown", "field": 0}
 
 
 async def test_a_custom_field_must_hold(client: AsyncClient, outbox: Outbox) -> None:

@@ -1,14 +1,16 @@
 """Applications: a holder asks an issuer for a credential.
 
 An issuer *offers* a credential type when it grants it and has a form for it
-(`issuer_credentials`); the public catalogue lists its offers
+(`issuer_credentials`); the public catalogue lists every published issuer's
+offers (``GET /catalog/offers``) and opens each
 (``GET /catalog/issuers/{slug}/offers/{type}``). A holder applies through the
-portal — they have no account here, and need none:
+catalog (``catalog_url``, the wallet's `client_id`) — they have no account
+here, and need none:
 
-1. **Start** (``POST /applications``): the portal gets the application and a
+1. **Start** (``POST /applications``): the catalog gets the application and a
    secret, which it keeps; every holder-side call carries it
    (``X-Application-Secret``).
-2. **Pair** (QR 1): the portal asks for a wallet request (``…/wallet``,
+2. **Pair** (QR 1): the catalog asks for a wallet request (``…/wallet``,
    `pair`) and shows it as ``almena://auth?request_uri=…``. The wallet reads it
    (``GET /applications/{id}/request``) and answers by ``direct_post`` with an
    ``id_token`` by the `did:key` it keeps for this issuer: the application is
@@ -22,7 +24,7 @@ portal — they have no account here, and need none:
    application's content, readable, and its digest (SHA-256 of its JCS) —
    checks the digest, and answers with a JWS by the same `did:key` over it.
    Submitted, it is the issuer's to decide.
-5. **Receive**: once accepted and issued (`routes.issuance`), the portal asks
+5. **Receive**: once accepted and issued (`routes.issuance`), the catalog asks
    for a `receive` request (QR 3); the wallet answers with an ``id_token`` by
    the `did:key` it paired with — the one the credential is bound to — and the
    answer to that post is the credential itself (an SD-JWT VC with all its
@@ -51,6 +53,7 @@ from fastapi import (
     File,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     UploadFile,
@@ -61,21 +64,37 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import answers as checks
 from registry_api import credential_catalog as credentials
+from registry_api import (
+    didcomm,
+    form_credentials,
+    notices,
+    presentations,
+    queues,
+    status_lists,
+    wallet,
+    webvh,
+)
 from registry_api import field_catalog as catalog
-from registry_api import form_credentials, presentations, wallet, webvh
 from registry_api.api.routes.auth import DbSession, as_utc
 from registry_api.api.routes.directory import TenantId
 from registry_api.config import get_settings
-from registry_api.models import Application, ApplicationFile, Form, Issuer
+from registry_api.models import (
+    Application,
+    ApplicationFile,
+    Form,
+    Identity,
+    Issuer,
+    StatusList,
+)
 from registry_api.security import digest, new_token
 
 router = APIRouter(prefix="/applications", tags=["applications"])
-offers = APIRouter(prefix="/catalog/issuers", tags=["applications"])
+offers = APIRouter(prefix="/catalog", tags=["applications"])
 inbox = APIRouter(prefix="/tenants/{tenant_id}/applications", tags=["applications"])
 
 TTL = timedelta(days=1)
@@ -90,8 +109,8 @@ def _refuse(code: str, status_code: int = status.HTTP_409_CONFLICT) -> HTTPExcep
 
 
 def _client_id() -> str:
-    """Who the wallet answers: the portal, as for sign-in."""
-    return get_settings().portal_url.rstrip("/")
+    """Who the wallet answers: the catalog, where holders apply."""
+    return get_settings().catalog_url.rstrip("/")
 
 
 # The offer -------------------------------------------------------------------
@@ -140,13 +159,144 @@ async def offer_view(db: AsyncSession, issuer: Issuer, form: Form, type_id: str)
 
 
 @offers.get(
-    "/{issuer_slug}/offers/{type_id}",
+    "/issuers/{issuer_slug}/offers/{type_id}",
     summary="Public: an issuer's offer of a credential type, with its form",
     responses={status.HTTP_404_NOT_FOUND: {"description": "`offer_not_found`"}},
 )
 async def get_offer(issuer_slug: str, type_id: str, db: DbSession) -> dict[str, Any]:
     issuer, form = await _offering(db, issuer_slug, type_id)
     return await offer_view(db, issuer, form, type_id)
+
+
+class OfferIssuer(BaseModel):
+    slug: str
+    name: str
+    description: str | None
+    did: str
+
+
+class OfferCategory(BaseModel):
+    id: str
+    labels: dict[str, str]
+
+
+class OfferType(BaseModel):
+    id: str
+    labels: dict[str, str]
+    descriptions: dict[str, str]
+    category: OfferCategory
+
+
+class OfferEntry(BaseModel):
+    issuer: OfferIssuer
+    credential_type: OfferType
+
+
+class OfferPage(BaseModel):
+    items: list[OfferEntry]
+    # Pass it back as `cursor` for the next page; `null` on the last one.
+    next_cursor: str | None
+    # Every offer listed, on every page.
+    total: int
+
+
+def _offered(granted: list[str] | None, forms: dict[str, str] | None) -> list[str]:
+    """The types an issuer offers, in the order it grants them: granted, with a
+    form to apply, and still in the catalogue."""
+    return [t for t in granted or [] if t in (forms or {}) and t in credentials.BY_ID]
+
+
+def _offers_of(issuer: Issuer) -> list[str]:
+    return _offered(issuer.credential_types, issuer.request_forms)
+
+
+def _offer_cursor(issuer: Issuer, type_id: str) -> str:
+    assert issuer.published_at is not None
+    raw = f"{issuer.published_at.isoformat()}|{issuer.id}|{type_id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _offer_position(cursor: str) -> tuple[datetime, uuid.UUID, str]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
+        moment, issuer_id, type_id = raw.split("|")
+        return datetime.fromisoformat(moment), uuid.UUID(issuer_id), type_id
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_cursor") from None
+
+
+def _offer_entry(issuer: Issuer, type_id: str) -> OfferEntry:
+    item = credentials.BY_ID[type_id]
+    return OfferEntry(
+        issuer=OfferIssuer(
+            slug=issuer.slug,
+            name=issuer.name,
+            description=issuer.description,
+            did=issuer.identity.did or "",
+        ),
+        credential_type=OfferType(
+            id=item.id,
+            labels=item.labels,
+            descriptions=item.descriptions,
+            category=OfferCategory(id=item.category, labels=credentials.CATEGORIES[item.category]),
+        ),
+    )
+
+
+@offers.get(
+    "/offers",
+    summary="Public: every published issuer's offers, newest issuer first",
+    responses={status.HTTP_400_BAD_REQUEST: {"description": "`invalid_cursor`"}},
+)
+async def list_offers(
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    cursor: Annotated[str | None, Query(max_length=300)] = None,
+) -> OfferPage:
+    # Only issuers whose DID resolves; each offer is one of their types.
+    listed = (Issuer.published_at.is_not(None), Identity.did.is_not(None))
+    query = (
+        select(Issuer)
+        .join(Issuer.identity)
+        .where(*listed)
+        .order_by(Issuer.published_at.desc(), Issuer.id.desc())
+    )
+    granted = await db.execute(
+        select(Issuer.credential_types, Issuer.request_forms).join(Issuer.identity).where(*listed)
+    )
+    total = sum(len(_offered(types, forms)) for types, forms in granted)
+    after: str | None = None
+    if cursor:
+        moment, issuer_id, after = _offer_position(cursor)
+        # The issuer the last page ended in comes again, from after its type.
+        query = query.where(
+            or_(
+                Issuer.published_at < moment,
+                and_(Issuer.published_at == moment, Issuer.id <= issuer_id),
+            )
+        )
+        first: uuid.UUID | None = issuer_id
+    else:
+        first = None
+    found: list[tuple[Issuer, str]] = []
+    batch, skip = max(limit, 20), 0
+    while len(found) <= limit:
+        issuers = list(await db.scalars(query.offset(skip).limit(batch)))
+        for issuer in issuers:
+            types = _offers_of(issuer)
+            if issuer.id == first and after is not None:
+                types = types[types.index(after) + 1 :] if after in types else []
+            found.extend((issuer, type_id) for type_id in types)
+        if len(issuers) < batch:
+            break
+        skip += batch
+    page = found[:limit]
+    more = len(found) > limit
+    return OfferPage(
+        items=[_offer_entry(issuer, type_id) for issuer, type_id in page],
+        next_cursor=_offer_cursor(*page[-1]) if more else None,
+        total=total,
+    )
 
 
 # The holder's side -----------------------------------------------------------
@@ -277,6 +427,7 @@ async def _view(db: AsyncSession, item: Application) -> dict[str, Any]:
         if item.credential_valid_until
         else None,
         "delivered_at": item.delivered_at.isoformat() if item.delivered_at else None,
+        **_credential_status(item),
     }
 
 
@@ -516,6 +667,51 @@ async def ask_wallet(item: Mine, body: WalletIn, db: DbSession) -> dict[str, Any
     return (await _view(db, item))["wallet"]  # type: ignore[no-any-return]
 
 
+class CollectIn(BaseModel):
+    # Signed by the holder's key for this issuer (the one it paired with):
+    # audience this very endpoint (the notice's `collect`), nonce the
+    # application's id.
+    id_token: str = Field(max_length=8192)
+
+
+@router.post(
+    "/{application_id}/collect",
+    summary="The holder's wallet asks to receive its issued credential, from a notice",
+    responses={
+        status.HTTP_400_BAD_REQUEST: {"description": "`invalid_token`, `invalid_did`"},
+        status.HTTP_404_NOT_FOUND: {"description": "`application_not_found`"},
+        status.HTTP_409_CONFLICT: {"description": "`not_issued`, `already_received`"},
+    },
+)
+async def collect(application_id: uuid.UUID, body: CollectIn, db: DbSession) -> dict[str, Any]:
+    """What the `issued` notice points at: the wallet proves it is the holder
+    and gets a `receive` request, answered as the catalog's QR 3 is."""
+    item = await db.get(Application, application_id)
+    if item is None or item.holder_did is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="application_not_found")
+    try:
+        did = wallet.verify(body.id_token, audience=notices.collect_url(item), nonce=str(item.id))
+    except wallet.WalletError as error:
+        raise _refuse(error.code, status.HTTP_400_BAD_REQUEST) from None
+    if did != item.holder_did:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="application_not_found")
+    if item.status != "issued":
+        raise _refuse("not_issued")
+    if item.delivered_at is not None:
+        raise _refuse("already_received")
+    item.wallet_purpose = "receive"
+    item.wallet_nonce = secrets.token_urlsafe(24)
+    item.wallet_expires_at = datetime.now(UTC) + WALLET_TTL
+    item.wallet_answered = False
+    await db.commit()
+    return {
+        "request_uri": f"{get_settings().public_url.rstrip('/')}"
+        f"/api/v1/applications/{item.id}/request",
+        "deep_link": _deep_link(item),
+        "expires_at": item.wallet_expires_at.isoformat(),
+    }
+
+
 async def _asked(db: AsyncSession, application_id: uuid.UUID) -> Application:
     item = await db.get(Application, application_id)
     if item is None or item.wallet_purpose is None or item.wallet_nonce is None:
@@ -569,6 +765,21 @@ async def read_request(application_id: uuid.UUID, db: DbSession) -> dict[str, An
     return request
 
 
+def _messaging_did(id_token: str) -> str | None:
+    """Where the holder receives the issuer's messages: the `did:peer:2` the
+    (already verified) pairing token names as `didcomm`, if it does;
+    `invalid_didcomm` if it names something else."""
+    named = jwt.decode(id_token, options={"verify_signature": False}).get("didcomm")
+    if named is None:
+        return None
+    if not isinstance(named, str):
+        raise _refuse("invalid_didcomm", status.HTTP_400_BAD_REQUEST)
+    try:
+        return didcomm.peer(named).did
+    except didcomm.DidCommError as error:
+        raise _refuse(error.code, status.HTTP_400_BAD_REQUEST) from None
+
+
 async def _answer(request: Request) -> dict[str, Any]:
     """The wallet's answer: a form (`direct_post`) or JSON."""
     raw = (await request.body())[: 2 * 1024 * 1024].decode(errors="replace")
@@ -603,7 +814,11 @@ async def _answer(request: Request) -> dict[str, Any]:
     },
 )
 async def answer_request(
-    application_id: uuid.UUID, request: Request, db: DbSession, fetch: StatusFetch
+    application_id: uuid.UUID,
+    request: Request,
+    db: DbSession,
+    fetch: StatusFetch,
+    broker: notices.BrokerDep,
 ) -> Response:
     item = await _asked(db, application_id)
     body = await _answer(request)
@@ -622,6 +837,7 @@ async def answer_request(
             if item.status != "open":
                 raise _refuse("already_paired")
             item.holder_did = did
+            item.holder_messaging_did = _messaging_did(token)
             item.status = "paired"
         case "present":
             token = body.get("vp_token")
@@ -680,6 +896,9 @@ async def answer_request(
             item.submitted_at = datetime.now(UTC)
     item.wallet_answered = True
     await db.commit()
+    if item.wallet_purpose == "submit":
+        # The issuer's back office hears of it, when it has a queue.
+        await queues.submitted(db, broker, item, await content(db, item), await _files(db, item))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -713,7 +932,7 @@ async def _deliver(db: AsyncSession, item: Application, token: object) -> Respon
 
 
 def _check_signature(token: str, holder: str, nonce: str | None) -> dict[str, Any]:
-    """The submission's JWS: by the holder's `did:key`, for the portal and, while
+    """The submission's JWS: by the holder's `did:key`, for the catalog and, while
     it is being made, this request's nonce."""
     try:
         issuer = jwt.decode(token, options={"verify_signature": False}).get("iss")
@@ -739,10 +958,20 @@ def _check_signature(token: str, holder: str, nonce: str | None) -> dict[str, An
 
 @router.get(
     "/{application_id}/wallet",
-    summary="Whether the wallet has answered the request in course (the portal polls)",
+    summary="Whether the wallet has answered the request in course (the catalog polls)",
 )
 async def wallet_state(item: Mine, db: DbSession) -> dict[str, Any]:
     return (await _view(db, item))["wallet"]  # type: ignore[no-any-return]
+
+
+def _credential_status(item: Application) -> dict[str, Any]:
+    """An issued credential's status as its issuer's list says (as signed)."""
+    return {
+        "credential_status": item.credential_status,
+        "credential_status_at": item.credential_status_at.isoformat()
+        if item.credential_status_at
+        else None,
+    }
 
 
 # The issuer's inbox ----------------------------------------------------------
@@ -780,6 +1009,7 @@ async def list_received(
                 "form": form.name,
                 "holder_did": item.holder_did,
                 "submitted_at": item.submitted_at.isoformat() if item.submitted_at else None,
+                "credential_status": item.credential_status,
             }
         )
     return out
@@ -801,6 +1031,7 @@ async def get_received(
         signature_valid = claims.get("digest") == content_digest(signed) == item.digest
     except HTTPException:
         signature_valid = False
+    listed = await db.get(StatusList, item.status_list_id) if item.status_list_id else None
     return {
         "id": str(item.id),
         "slug": item.slug,
@@ -822,6 +1053,16 @@ async def get_received(
         if item.credential_valid_until
         else None,
         "delivered_at": item.delivered_at.isoformat() if item.delivered_at else None,
+        **_credential_status(item),
+        # Its entry in the issuer's status list; `null` if issued before them.
+        "status_list": {"uri": status_lists.uri(listed), "index": item.status_index}
+        if listed is not None
+        else None,
+        # The statuses its issuer's signer may give it next; none unless issued
+        # into a status list, nor once revoked.
+        "credential_statuses": status_lists.next_statuses(item.credential_status)
+        if item.status == "issued" and listed is not None
+        else [],
     }
 
 
@@ -862,7 +1103,13 @@ class DecisionIn(BaseModel):
     responses={status.HTTP_409_CONFLICT: {"description": "`already_decided`"}},
 )
 async def decide(
-    tenant_id: TenantId, application_id: uuid.UUID, body: DecisionIn, db: DbSession
+    tenant_id: TenantId,
+    application_id: uuid.UUID,
+    body: DecisionIn,
+    db: DbSession,
+    vault: notices.VaultDep,
+    courier: notices.Courier,
+    broker: notices.BrokerDep,
 ) -> dict[str, Any]:
     item = await _received(db, tenant_id, application_id)
     if item.status != "submitted":
@@ -871,4 +1118,7 @@ async def decide(
     item.decision_note = (body.note or "").strip() or None
     item.decided_at = datetime.now(UTC)
     await db.commit()
+    # The holder hears of it over DIDComm, when its wallet said where.
+    await notices.notify(db, vault, courier, item, body.decision)
+    await queues.decided(db, broker, item)
     return await get_received(tenant_id, application_id, db)

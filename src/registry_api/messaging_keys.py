@@ -80,6 +80,15 @@ async def ensure(vault: Vault, item: Issuer | Verifier, identity: Identity) -> s
     return identity.agreement_key
 
 
+async def private(vault: Vault, item: Issuer | Verifier) -> X25519PrivateKey | None:
+    """The item's private key, to write as it; `None` until it is made.
+    VaultError when the vault fails."""
+    secret = await vault.read(path(item.tenant_id, kind_of(item), item.id))
+    if secret is None:
+        return None
+    return X25519PrivateKey.from_private_bytes(_unb64(secret["d"]))
+
+
 async def forget(vault: Vault, tenant_id: uuid.UUID, kind: Kind, item_id: uuid.UUID) -> None:
     """Delete every secret the item has in the vault (it is being deleted)."""
     await vault.delete_tree(paths.entity_root(tenant_id, kind, item_id))

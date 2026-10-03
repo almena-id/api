@@ -102,9 +102,12 @@ class DescribedPatch(BaseModel):
 
 
 class MediatorPatch(BaseModel):
-    # Each field is changed only when sent.
+    # Each field is changed only when sent. Its address moves as it is made:
+    # `subdomain` and `domain_id` together, the domain one of the tenant's
+    # verified ones.
     name: str | None = Field(default=None, max_length=200)
-    url: str | None = Field(default=None, max_length=2048)
+    subdomain: str | None = Field(default=None, max_length=200)
+    domain_id: uuid.UUID | None = None
     public: bool | None = None
 
 
@@ -158,6 +161,8 @@ class Signed(BaseModel):
     document: dict[str, Any]
     # What the log says now, as signed; `null` while pending.
     signed_document: dict[str, Any] | None
+    # The top-level fields `document` changes from `signed_document` (outdated).
+    changes: list[str]
     log_url: str | None
     document_url: str | None
     # A published issuer's, verifier's or mediator's endorsement by its
@@ -184,11 +189,14 @@ class ItemDetail(Signed, ItemOut):
 async def signed_of(db: AsyncSession, identity: Identity) -> Signed:
     did_url = get_settings().did_url
     base = dids.base_url(did_url, identity.slug, await dids.is_root_identity(db, identity.id))
+    document = await dids.desired(db, did_url, identity)
+    signed_document = await dids.published(db, identity)
     return Signed(
         did=identity.did,
         signature=await dids.status_of(db, did_url, identity),
-        document=await dids.desired(db, did_url, identity),
-        signed_document=await dids.published(db, identity),
+        document=document,
+        signed_document=signed_document,
+        changes=dids.changes(document, signed_document),
         log_url=f"{base}/did.jsonl" if identity.did else None,
         document_url=f"{base}/did.json" if identity.did else None,
         whois_url=f"{base}/whois.vp" if identity.presentation else None,
@@ -342,25 +350,18 @@ async def tenant_mediator(
     return mediator.id
 
 
-def _endpoint(url: str) -> str:
-    try:
-        return mediators.endpoint(url)
-    except mediators.MediatorError as error:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=error.code) from None
-
-
 async def _address(
-    db: DbSession, tenant_id: uuid.UUID, subdomain: str, domain_id: uuid.UUID
+    db: DbSession, tenant_id: uuid.UUID, subdomain: str | None, domain_id: uuid.UUID | None
 ) -> str:
-    """A new mediator's address: the subdomain typed of one of the tenant's
+    """A mediator's address: the subdomain typed of one of the tenant's
     verified domains."""
-    domain = await db.get(TenantDomain, domain_id)
+    domain = await db.get(TenantDomain, domain_id) if domain_id is not None else None
     if domain is None or domain.tenant_id != tenant_id:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="domain_not_found")
     if domain.verified_at is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="domain_unverified")
     try:
-        return mediators.address(subdomain, domain.domain)
+        return mediators.address(subdomain or "", domain.domain)
     except mediators.MediatorError as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=error.code) from None
 
@@ -545,15 +546,20 @@ async def get_mediator(tenant_id: TenantId, mediator_id: uuid.UUID, db: DbSessio
 @router.patch(
     "/mediators/{mediator_id}",
     summary="Change a mediator's name, address or whether it is public (its DID stays)",
-    responses={422: {"description": "`name_required`, `mediator_invalid`, `mediator_insecure`"}},
+    responses={
+        422: {
+            "description": "`name_required`, `domain_not_found` (not the tenant's, or not "
+            "sent with `subdomain`), `domain_unverified`, `subdomain_invalid`"
+        }
+    },
 )
 async def update_mediator(
     tenant_id: TenantId, mediator_id: uuid.UUID, body: MediatorPatch, db: DbSession
 ) -> ItemDetail:
     mediator = await _mediator(db, tenant_id, mediator_id)
     sent = body.model_fields_set
-    if "url" in sent:
-        mediator.url = _endpoint(body.url or "")
+    if sent & {"subdomain", "domain_id"}:
+        mediator.url = await _address(db, tenant_id, body.subdomain, body.domain_id)
     # Tenants that picked it while public keep it: it is only no longer offered.
     if body.public is not None:
         mediator.public = body.public

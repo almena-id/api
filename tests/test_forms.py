@@ -99,8 +99,9 @@ async def test_a_form_only_takes_catalogue_fields_made_stricter(
             base, json={"name": {"en": "Request"}, "fields": fields}, headers=headers
         )
         assert response.status_code == 422, response.text
-        detail: str = response.json()["detail"]
-        return detail
+        detail = response.json()["detail"]
+        code: str = detail if isinstance(detail, str) else detail["code"]
+        return code
 
     name = {"ref": "given_name"}
     assert await refused([]) == "fields_required"
@@ -108,6 +109,13 @@ async def test_a_form_only_takes_catalogue_fields_made_stricter(
     assert await refused([{"ref": "favourite_colour"}]) == "field_unknown"
     assert await refused([{"ref": "street_address"}]) == "field_unknown"
     assert await refused([name, name]) == "field_key_duplicate"
+    # Which field does not hold: its index, the one repeating a key for a duplicate.
+    which = await client.post(
+        base,
+        json={"name": {"en": "Request"}, "fields": [name, {"ref": "family_name"}, name]},
+        headers=headers,
+    )
+    assert which.json()["detail"] == {"code": "field_key_duplicate", "field": 2}
     assert await refused([{"ref": "document_file"}, {"ref": "document_file"}]) == (
         "field_key_duplicate"
     )

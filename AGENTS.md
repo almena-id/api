@@ -38,6 +38,9 @@ src/registry_api/
   issuance.py        issuing an accepted application's credential: the SD-JWT VC its
                      signer's wallet signs (header, payload, disclosures) and the check
                      of that JWS
+  status_lists.py    issuers' status lists (IETF Token Status List, 2 bits: valid, revoked,
+                     suspended): packing, the token its signer's wallet signs, random
+                     indexes, whether a list must be signed (again)
   presentations.py   verifying presented credentials (SD-JWT VC, W3C JWT VC/VP): issuer
                      signature by registry DID, the form's trust, type, validity, status
                      lists (`get_status_fetch`, overridden in tests), holder binding, claims
@@ -58,6 +61,23 @@ src/registry_api/
                      signing flow) and its score; new checks go here
   webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked, never made)
   wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token
+  didcomm.py         DIDComm v2 as an issuer writes to a holder: did:peer:2, a mediator's
+                     did:web document, JWE authcrypt/anoncrypt (X25519, A256CBC-HS512, byte
+                     for byte as almena-didcomm), Routing 2.0 forward, and the `Courier`
+                     that fetches and posts (`get_courier`, overridden in tests)
+  broker/            the message broker issuers' and verifiers' back offices read from:
+                     base.py (`Broker`: declare a queue, grant its read-only user,
+                     remove both, publish), rabbitmq.py (the management HTTP API),
+                     memory.py (tests); `get_broker`, overridden in tests
+  queues.py          what goes into an issuer's queue (`subject.{slug}`): applications
+                     submitted, decided, issued, and credential status changes; never a
+                     condition for what happened
+  notices.py         telling the holder over DIDComm how its application stands (accepted,
+                     rejected, issued): the message, sent from the issuer's DID; never a
+                     condition for the decision or the issuance
+  mcp.py             the MCP tools: each one a route of the API (`TOOLS`: name, method,
+                     path), its input schema built from that route's OpenAPI operation, called
+                     in process with the caller's bearer token; a new tool is a line there
   oauth.py           social sign-in providers (Google, Microsoft, Apple, GitHub):
                      authorize URL, code exchange, the verified email they vouch for
   api/router.py      /api/v1 router: include new route modules here
@@ -77,6 +97,11 @@ src/registry_api/
                      directory.py: a tenant's issuers, verifiers, mediators, identities;
                      publication.py: publishing them (the tenant's signers; unpublishing, admins) and the public catalogue;
                      signing.py: an issuer's or verifier's signing system (admins set it)
+                     queues.py: an issuer's or verifier's queue at the broker (admins make,
+                     rotate and delete it; its password shown once)
+                     verifications.py: a verifier asking a wallet by QR to present a form's
+                     credentials (OpenID4VP `purpose: verify`), its verdict kept and sent
+                     to the verifier's queue
                      (`member_tenant` guards them; keyset paging by cursor)
                      domains.py: the tenant's linked domains, proved by DNS TXT
                      forms.py: the tenant's forms — the same whoever puts them (an issuer's
@@ -86,14 +111,19 @@ src/registry_api/
                      issuer_credentials.py: the credential types an issuer grants, and
                      the form for each (its offers);
                      issuance.py: an accepted application's claims, draft and the
-                     signer's wallet request (`sign`, kind `credential`);
+                     signer's wallet request (`sign`, kind `credential`), once its
+                     status list is signed;
+                     status_lists.py: the public list (`/status-lists/{slug}`, outside
+                     /api/v1), the issuer's lists and their signing, and suspending,
+                     reinstating or revoking a credential (`sign`, kind `status_list`);
                      applications.py: holders applying for an offer (no account: a
                      secret), the wallet's pair/present/submit requests on the
                      sign-in channel, and the issuer's inbox;
                      fields.py: the field and credential catalogues, public (`/catalog/fields`, and
                      `/schemas/fields/v1[/{id}.json]` outside /api/v1, on the identity domain)
                      members.py: members and invitations (`admin_of` guards inviting);
-                     auth.py's `_sign_in` turns pending invitations into membership
+                     auth.py's `_sign_in` turns pending invitations into membership;
+                     mcp.py: the MCP endpoint at `/mcp` (outside /api/v1; JSON-RPC, stateless)
   models/            SQLAlchemy models; import each one in models/__init__.py
 migrations/          Alembic (env.py reads the settings and models)
 openbao/             OpenBao under Compose: config.hcl (Raft storage, audit to stdout) and

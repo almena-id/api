@@ -5,6 +5,7 @@ import string
 import uuid
 from collections.abc import Callable
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, MetaData, String, Uuid, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -50,6 +51,21 @@ class SigningMixin:
     signer_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
+
+
+class QueueMixin:
+    """An issuer's or a verifier's queue at the broker (`registry_api.broker`):
+    `subject.{slug}`, read by a user named like it. When it was made; `null`
+    while it has none."""
+
+    queue_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    if TYPE_CHECKING:
+        slug: str
+
+    @property
+    def queue_name(self) -> str:
+        return f"subject.{self.slug}"
 
 
 # Slugs: a type prefix and 12 random lowercase letters and digits (~62 bits),

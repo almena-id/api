@@ -7,6 +7,8 @@ from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from registry_api.broker import get_broker
+from registry_api.broker.memory import MemoryBroker
 from registry_api.config import Settings, get_settings
 from registry_api.db import get_session
 from registry_api.dns_proof import get_txt_lookup
@@ -57,6 +59,14 @@ async def database() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     app.dependency_overrides[get_session] = override
     yield sessionmaker
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def broker() -> MemoryBroker:
+    """A broker in memory per test, in place of RabbitMQ."""
+    store = MemoryBroker()
+    app.dependency_overrides[get_broker] = lambda: store
+    return store
 
 
 @pytest.fixture(autouse=True)

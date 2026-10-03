@@ -15,9 +15,12 @@ from registry_api.api.routes import (
     issuer_credentials,
     members,
     publication,
+    queues,
     signing,
+    status_lists,
     tenants,
     tokens,
+    verifications,
     wallet,
 )
 
@@ -37,8 +40,13 @@ api_router.include_router(applications.router)
 api_router.include_router(applications.offers)
 api_router.include_router(applications.inbox)
 api_router.include_router(issuance.router)
+api_router.include_router(status_lists.router)
+api_router.include_router(status_lists.credentials)
 api_router.include_router(directory.router)
 api_router.include_router(members.router)
 api_router.include_router(publication.router)
 api_router.include_router(publication.catalog)
 api_router.include_router(signing.router)
+api_router.include_router(queues.router)
+api_router.include_router(verifications.router)
+api_router.include_router(verifications.public)

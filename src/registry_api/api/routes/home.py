@@ -67,6 +67,14 @@ _TEMPLATE = Template((_ASSETS / "home.html").read_text(encoding="utf-8"))
 _CSS = (_ASSETS / "home.css").read_text(encoding="utf-8")
 
 
+def _docs_row(settings: Settings) -> str:
+    """The Docu URL row, only when the reference is served."""
+    if not settings.docs_enabled:
+        return ""
+    url = escape(f"{settings.public_url}/docs")
+    return f'<dt>Docu URL</dt><dd><a href="{url}"><code>{url}</code></a></dd>\n'
+
+
 def page(*, ready: bool, version: str, settings: Settings, year: int) -> str:
     """The root page, whole."""
     state, label = ("ok", "Operational") if ready else ("down", "Degraded")
@@ -80,6 +88,7 @@ def page(*, ready: bool, version: str, settings: Settings, year: int) -> str:
         version=escape(version),
         database="Connected" if ready else "Unavailable",
         base_url=escape(f"{settings.public_url}/api/v1"),
+        docs=_docs_row(settings),
         year=year,
     )
 

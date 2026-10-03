@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     openbao_role_id: str = "registry-api"
     openbao_secret_id: SecretStr = SecretStr("")
 
+    # The broker issuers' and verifiers' back offices read their queues from
+    # (registry_api.broker). The API manages it through the management HTTP
+    # API, as the platform's own account, in one virtual host; tenants connect
+    # over AMQP at `rabbitmq_amqp_url`, which is what the portal shows them.
+    rabbitmq_api_url: str = "http://localhost:15672"
+    rabbitmq_admin: str = "almena"
+    rabbitmq_password: SecretStr = SecretStr("")
+    rabbitmq_vhost: str = "almena"
+    rabbitmq_amqp_url: str = "amqps://broker.almena.id:5671"
+
+    # Public origin of the catalog, the citizens' portal where holders apply
+    # for credentials: the wallet answers it (`client_id`) when applying.
+    catalog_url: str = "https://catalog.almena.id"
+
     # Public origin of the portal: providers send the browser back to
     # `{portal_url}/auth/{provider}/callback`, which is what each one registers.
     portal_url: str = "https://registry.almena.id"

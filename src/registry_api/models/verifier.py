@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from registry_api.models.base import (
     Base,
     PublishedMixin,
+    QueueMixin,
     SigningMixin,
     TimestampMixin,
     slug_column,
@@ -16,7 +17,7 @@ from registry_api.models.identity import Identity
 from registry_api.models.mediator import Mediator
 
 
-class Verifier(SigningMixin, PublishedMixin, TimestampMixin, Base):
+class Verifier(QueueMixin, SigningMixin, PublishedMixin, TimestampMixin, Base):
     __tablename__ = "verifiers"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

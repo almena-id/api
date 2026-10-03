@@ -40,7 +40,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import dids, issuance, messaging_keys, signing_flows, wallet, webvh
+from registry_api import (
+    dids,
+    issuance,
+    messaging_keys,
+    notices,
+    queues,
+    signing_flows,
+    status_lists,
+    wallet,
+    webvh,
+)
 from registry_api.api.routes.account import LinkResult, settle_taken
 from registry_api.api.routes.auth import (
     CurrentSession,
@@ -61,6 +71,7 @@ from registry_api.models import (
     Identity,
     Issuer,
     Mediator,
+    StatusList,
     Tenant,
     TenantMember,
     User,
@@ -110,7 +121,14 @@ class RequestOut(BaseModel):
     expires_at: datetime
 
 
-SignKind = Literal["did_log_entry", "endorsement", "credential"]
+SignKind = Literal["did_log_entry", "endorsement", "credential", "status_list"]
+
+
+class StatusChange(BaseModel):
+    index: int
+    status: Literal["valid", "suspended", "revoked"]
+    # The credential's holder, as the issuer knows them.
+    holder: str | None = None
 
 
 class SignObject(BaseModel):
@@ -147,6 +165,9 @@ class SignObject(BaseModel):
     # `endorsement`: the presentation to sign after the credential, signed for
     # `authentication`.
     presentation: dict[str, Any] | None = None
+    # `status_list`: the entry it changes, and to what (`valid`, `suspended`,
+    # `revoked`); `null` when the list is signed as it is.
+    status_change: StatusChange | None = None
 
 
 class RequestObject(BaseModel):
@@ -288,7 +309,14 @@ async def read_request(request_id: uuid.UUID, db: DbSession) -> RequestObject:
         status.HTTP_410_GONE: {"description": "`request_expired`"},
     },
 )
-async def answer_request(request_id: uuid.UUID, request: Request, db: DbSession) -> None:
+async def answer_request(
+    request_id: uuid.UUID,
+    request: Request,
+    db: DbSession,
+    vault: notices.VaultDep,
+    courier: notices.Courier,
+    broker: notices.BrokerDep,
+) -> None:
     found = await _live(db, request_id)
     if found.did is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="already_answered")
@@ -299,7 +327,7 @@ async def answer_request(request_id: uuid.UUID, request: Request, db: DbSession)
         try:
             body = json.loads(raw)
             if found.purpose == "sign":
-                await _sign(db, found, body)
+                await _sign(db, found, body, notices.Notifier(vault, courier, broker))
                 return
             token = body.get("id_token")
         except (ValueError, AttributeError):
@@ -319,13 +347,18 @@ async def answer_request(request_id: uuid.UUID, request: Request, db: DbSession)
     await db.commit()
 
 
-async def _sign(db: AsyncSession, found: WalletRequest, body: dict[str, Any]) -> None:
+async def _sign(
+    db: AsyncSession, found: WalletRequest, body: dict[str, Any], notifier: notices.Notifier
+) -> None:
     """Checks the wallet's proof over what it was asked to sign, and keeps the
     result: a log entry, or an endorsed (and so published) component."""
     payload = json.loads(found.payload or "{}")
     sign = SignObject.model_validate(payload["sign"])
     if sign.kind == "credential":
-        await _issue(db, found, payload, sign, body.get("jws"))
+        await _issue(db, found, payload, sign, body.get("jws"), notifier)
+        return
+    if sign.kind == "status_list":
+        await _set_statuses(db, found, payload, sign, body.get("jws"), notifier)
         return
     proof = body.get("proof")
     try:
@@ -358,9 +391,11 @@ async def _issue(
     payload: dict[str, Any],
     sign: SignObject,
     jws: object,
+    notifier: notices.Notifier,
 ) -> None:
     """The issuer's signer signed the credential: if it is their key, over
-    what was sent, the application's credential is issued."""
+    what was sent, the application's credential is issued, and the holder
+    told so over DIDComm when its wallet said where."""
     credential, key = issuance.signed(sign.document, jws, sign.signers)
     if key not in await my_keys(db, found.user_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="not_your_key")
@@ -370,8 +405,50 @@ async def _issue(
     item.credential = credential
     item.status = "issued"
     item.issued_at = datetime.now(UTC)
+    item.credential_status = "valid"
+    item.credential_status_at = item.issued_at
     found.did = f"did:key:{key}"
     await db.commit()
+    await notifier.notify(db, item, "issued")
+    await queues.issued(db, notifier.broker, item)
+
+
+async def _set_statuses(
+    db: AsyncSession,
+    found: WalletRequest,
+    payload: dict[str, Any],
+    sign: SignObject,
+    jws: object,
+    notifier: notices.Notifier,
+) -> None:
+    """The issuer's signer signed its status list: if it is their key, over
+    what was sent, and nothing replaced the list meanwhile, it is the list
+    from now on — and the credential whose status it changes has that status,
+    which the issuer's queue hears of."""
+    key = issuance.checked(sign.document, jws, sign.signers)
+    if key not in await my_keys(db, found.user_id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="not_your_key")
+    item = await db.get(StatusList, uuid.UUID(payload["status_list_id"]))
+    if item is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="status_list_gone")
+    if item.revision != payload["revision"]:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="status_list_changed")
+    now = datetime.now(UTC)
+    item.statuses = status_lists.decode(sign.document["payload"]["status_list"]["lst"])
+    item.token = cast(str, jws)
+    item.revision += 1
+    item.signed_at = now
+    changed: Application | None = None
+    if payload.get("application_id"):
+        application = await db.get(Application, uuid.UUID(payload["application_id"]))
+        if application is not None and application.status_list_id == item.id:
+            application.credential_status = payload["credential_status"]
+            application.credential_status_at = now
+            changed = application
+    found.did = f"did:key:{key}"
+    await db.commit()
+    if changed is not None:
+        await queues.status_changed(db, notifier.broker, changed)
 
 
 async def _append(

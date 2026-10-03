@@ -83,6 +83,12 @@ class RequestContext:
 _context: ContextVar[RequestContext | None] = ContextVar("request_context", default=None)
 
 
+def request_id() -> str | None:
+    """The current request's id (`None` outside a request)."""
+    context = _context.get()
+    return context.request_id if context is not None else None
+
+
 def set_user(user_id: uuid.UUID) -> None:
     """Tie what the current request logs to this user (once their session holds)."""
     if (context := _context.get()) is not None:

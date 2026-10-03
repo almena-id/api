@@ -18,7 +18,10 @@ publish differs from what it last signed it is *outdated*.
 
 Its DIDComm service depends on what acts as it: a mediator's names the address
 the mediator listens on; the tenant's, an issuer's or a verifier's names the
-DID of the mediator it picked, so messages to it are routed there. An
+`did:web` of the mediator it picked (`mediators.did_web`), the DID the
+mediator itself answers as: its document lists the keys a `forward` to it is
+encrypted to, which the registry's DID for the mediator does not (a mediator
+keeps its keys), so messages are routed there. An
 issuer's, a verifier's or a mediator's document names its tenant's DID as its
 `controller`. A tenant names the domains it has proved by DNS, those linked to
 it, as a `LinkedDomains` service.
@@ -58,7 +61,7 @@ from urllib.parse import quote, urlsplit
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import messaging_keys, signing_flows, webvh
+from registry_api import mediators, messaging_keys, signing_flows, webvh
 from registry_api.models import (
     DidLogEntry,
     Identity,
@@ -217,9 +220,9 @@ async def endpoint_for(db: AsyncSession, identity_id: uuid.UUID) -> str | None:
             .join(model, model.mediator_id == Mediator.id)
             .where(model.identity_id == identity_id)
         )
-        # A draft or pending mediator's DID does not resolve: nothing to route through yet.
+        # A draft or pending mediator: nothing to route through yet.
         if mediator is not None and mediator.published_at is not None:
-            return mediator.identity.did
+            return mediators.did_web(mediator.url)
     return None
 
 
@@ -320,6 +323,16 @@ async def status_of(db: AsyncSession, did_url: str, identity: Identity) -> Statu
         return "signed" if await next_entry(db, did_url, identity) is None else "outdated"
     except webvh.LogError:
         return "outdated"
+
+
+def changes(desired: dict[str, Any], signed: dict[str, Any] | None) -> list[str]:
+    """The top-level fields in which what an identity should publish differs
+    from what it last signed, in the order the documents name them; none
+    while pending."""
+    if signed is None:
+        return []
+    keys = list(dict.fromkeys([*desired, *signed]))
+    return [key for key in keys if desired.get(key) != signed.get(key)]
 
 
 def keys_under(document: dict[str, Any] | None, relationship: str) -> list[str]:

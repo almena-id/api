@@ -16,8 +16,9 @@ The wallet shows the claims (the disclosures, checked against `_sd`) before
 signing; its JWS is checked here against the very header and payload sent, with
 the signer's key, and the credential is the JWS followed by every disclosure.
 The holder's wallet then takes it with proof of the key it is bound to
-(`registry_api.api.routes.applications`, `receive`). Status lists come later:
-an issued credential cannot be revoked yet.
+(`registry_api.api.routes.applications`, `receive`). The payload's `status`
+names its entry in the issuer's status list, where it can later be suspended
+or revoked (`registry_api.status_lists`).
 """
 
 import base64
@@ -59,9 +60,11 @@ def document(
     holder: str,
     claims: dict[str, Any],
     valid_until: datetime,
+    status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What the issuer's signer signs: the header, the payload and the
-    disclosures its `_sd` lists, in the order the claims came."""
+    disclosures its `_sd` lists, in the order the claims came; with `status`,
+    its entry in the issuer's status list (`registry_api.status_lists`)."""
     disclosures = [disclosure(name, value) for name, value in claims.items()]
     return {
         "header": {"alg": "EdDSA", "typ": "dc+sd-jwt", "kid": f"{issuer}#{key}"},
@@ -73,6 +76,7 @@ def document(
             "cnf": {"kid": holder},
             "_sd_alg": "sha-256",
             "_sd": sorted(digest(text) for text in disclosures),
+            **({"status": status} if status else {}),
         },
         "disclosures": disclosures,
     }
@@ -87,10 +91,9 @@ def claims_of(disclosures: list[str]) -> dict[str, Any]:
     return found
 
 
-def signed(document: dict[str, Any], jws: object, signers: list[str]) -> tuple[str, str]:
-    """The credential, if `jws` is the signer's signature over this header and
-    payload: the JWS and every disclosure, `~`-separated; and the key that
-    signed. Anything else is refused."""
+def checked(document: dict[str, Any], jws: object, signers: list[str]) -> str:
+    """The key that signed, if `jws` is one of `signers`' signature over the
+    very header and payload of `document`. Anything else is refused."""
     refused = HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_signature")
     if not isinstance(jws, str) or jws.count(".") != 2:
         raise refused
@@ -112,4 +115,13 @@ def signed(document: dict[str, Any], jws: object, signers: list[str]) -> tuple[s
         raise refused from None
     if payload != document["payload"]:
         raise refused
+    return key
+
+
+def signed(document: dict[str, Any], jws: object, signers: list[str]) -> tuple[str, str]:
+    """The credential, if `jws` is the signer's signature over this header and
+    payload (`checked`): the JWS and every disclosure, `~`-separated; and the
+    key that signed."""
+    key = checked(document, jws, signers)
+    assert isinstance(jws, str)
     return jws + "~" + "".join(f"{text}~" for text in document["disclosures"]), key

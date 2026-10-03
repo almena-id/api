@@ -59,8 +59,11 @@ class CredentialRequest(BaseModel):
         return (texts.clean(value, 300) or None) if value is not None else None
 
 
-def _refuse(code: str) -> HTTPException:
-    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=code)
+def _refuse(code: str, index: int) -> HTTPException:
+    """A refusal about a credential request: which (its index in the list)."""
+    return HTTPException(
+        status.HTTP_422_UNPROCESSABLE_CONTENT, detail={"code": code, "credential": index}
+    )
 
 
 async def published_issuers(db: AsyncSession, type_id: str) -> set[str]:
@@ -76,22 +79,22 @@ async def published_issuers(db: AsyncSession, type_id: str) -> set[str]:
 async def stored(db: AsyncSession, requests: list[CredentialRequest]) -> list[dict[str, Any]]:
     """The block as kept, or why it cannot be."""
     kept: list[dict[str, Any]] = []
-    for request in requests:
+    for index, request in enumerate(requests):
         item = catalog.BY_ID.get(request.type)
         if item is None:
-            raise _refuse("credential_unknown")
+            raise _refuse("credential_unknown", index)
         key = request.key or item.id
         if not KEY.match(key):
-            raise _refuse("credential_key_invalid")
+            raise _refuse("credential_key_invalid", index)
         offered = [claim.field for claim in item.claims]
         # Left out, every claim of the type; sent, at least one.
         claims = offered if request.claims is None else request.claims
         if not claims or len(set(claims)) != len(claims) or set(claims) - set(offered):
-            raise _refuse("credential_claims_invalid")
+            raise _refuse("credential_claims_invalid", index)
         external = item.issuance == "external"
         trust = request.trust or ("framework" if external else "registry")
         if (trust == "framework") != external:
-            raise _refuse("credential_trust_invalid")
+            raise _refuse("credential_trust_invalid", index)
         entry: dict[str, Any] = {
             "key": key,
             "type": item.id,
@@ -109,15 +112,18 @@ async def stored(db: AsyncSession, requests: list[CredentialRequest]) -> list[di
                 or len(set(dids)) != len(dids)
                 or set(dids) - await published_issuers(db, item.id)
             ):
-                raise _refuse("credential_trust_invalid")
+                raise _refuse("credential_trust_invalid", index)
             entry["issuers"] = dids
         elif request.issuers:
-            raise _refuse("credential_trust_invalid")
+            raise _refuse("credential_trust_invalid", index)
         kept.append(entry)
-    if len({entry["key"] for entry in kept}) != len(kept):
-        raise _refuse("credential_key_duplicate")
-    if len({entry["type"] for entry in kept}) != len(kept):
-        raise _refuse("credential_type_duplicate")
+    for field, code in (("key", "credential_key_duplicate"), ("type", "credential_type_duplicate")):
+        seen: set[str] = set()
+        for index, entry in enumerate(kept):
+            if entry[field] in seen:
+                # The one that repeats what one before it took.
+                raise _refuse(code, index)
+            seen.add(entry[field])
     return kept
 
 

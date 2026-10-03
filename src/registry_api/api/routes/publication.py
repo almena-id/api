@@ -21,11 +21,11 @@ import base64
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 
 from registry_api import credentials, dids, messaging_keys, signing_flows
 from registry_api.api.routes.auth import CurrentSession, DbSession
@@ -38,6 +38,7 @@ from registry_api.api.routes.wallet import (
     my_keys,
     new_sign_request,
 )
+from registry_api.broker import Broker, BrokerError, get_broker
 from registry_api.models import Identity, Issuer, Mediator, Tenant, Verifier
 from registry_api.vault import Vault, VaultError, get_vault
 
@@ -178,8 +179,15 @@ async def delete(
     item_id: uuid.UUID,
     db: DbSession,
     vault: Annotated[Vault, Depends(get_vault)],
+    broker: Annotated[Broker, Depends(get_broker)],
 ) -> Response:
     item = await _owned(db, kind, tenant_id, item_id)
+    # Its queue goes with it: what it named, before it is gone.
+    queued = (
+        (item.slug, item.queue_name)
+        if isinstance(item, Issuer | Verifier) and item.queue_created_at
+        else None
+    )
     identity = await db.get(Identity, item.identity_id)
     if isinstance(item, Mediator):
         # The database would do it (SET NULL); said here so the session agrees.
@@ -199,6 +207,11 @@ async def delete(
             await messaging_keys.forget(vault, tenant_id, messaging_keys.kind_of(item), item.id)
         except VaultError:
             logger.warning("vault_keys_left", extra={"kind": kind, "item_id": str(item.id)})
+    if queued is not None:
+        try:
+            await broker.remove(*queued)
+        except BrokerError:
+            logger.warning("queue_left", extra={"kind": kind, "item_id": str(item.id)})
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -250,37 +263,62 @@ async def _tenant(db: DbSession, tenant_id: uuid.UUID) -> TenantPublic:
 
 
 @catalog.get(
-    "/{kind}", summary="Public: the published issuers, verifiers or mediators, newest first"
+    "/{kind}",
+    summary="Public: the published issuers, verifiers or mediators, newest first",
+    responses={422: {"description": "`grants_issuers_only`: `grants` filters issuers"}},
 )
 async def list_published(
     kind: Kind,
     db: DbSession,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     cursor: Annotated[str | None, Query(max_length=200)] = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    grants: Annotated[str | None, Query(max_length=64)] = None,
 ) -> CatalogPage:
     model = MODELS[kind]
+    if grants and kind != "issuers":
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="grants_issuers_only")
     # Only what resolves: published, under a DID that has been signed.
     query = (
         select(model)
         .join(Identity, Identity.id == model.identity_id)
         .where(model.published_at.is_not(None), Identity.did.is_not(None))
     )
-    if cursor:
-        moment, item_id = _decode(cursor)
+    # Searching: a part of its name, whatever the case, or of its DID.
+    text = (q or "").strip()
+    if text:
         query = query.where(
             or_(
-                model.published_at < moment,
-                and_(model.published_at == moment, model.id < item_id),
+                func.lower(model.name).contains(text.lower(), autoescape=True),
+                Identity.did.contains(text, autoescape=True),
             )
         )
-    rows = cast(
-        list[Publishable],
-        list(
-            await db.scalars(
-                query.order_by(model.published_at.desc(), model.id.desc()).limit(limit + 1)
-            )
-        ),
-    )
+
+    def after(moment: datetime, item_id: uuid.UUID) -> Any:
+        return or_(
+            model.published_at < moment,
+            and_(model.published_at == moment, model.id < item_id),
+        )
+
+    if cursor:
+        query = query.where(after(*_decode(cursor)))
+    query = query.order_by(model.published_at.desc(), model.id.desc())
+    # The types an issuer grants are a JSON list: those that grant `grants`
+    # are picked here, a batch at a time, until the page is full.
+    rows: list[Publishable] = []
+    batch = query
+    while True:
+        found = cast(list[Publishable], list(await db.scalars(batch.limit(limit + 1))))
+        rows += [
+            row
+            for row in found
+            if not grants or grants in (cast(Issuer, row).credential_types or [])
+        ]
+        if len(rows) > limit or len(found) <= limit:
+            break
+        last = found[-1]
+        assert last.published_at is not None
+        batch = query.where(after(last.published_at, last.id))
     more = len(rows) > limit
     rows = rows[:limit]
     tenants: dict[uuid.UUID, TenantPublic] = {}

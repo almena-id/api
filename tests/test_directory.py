@@ -216,6 +216,7 @@ async def test_an_identity_shows_its_did_document(
     # What it should say now, beside what was last signed.
     assert "service" in outdated["document"]
     assert "service" not in outdated["signed_document"]
+    assert outdated["changes"] == ["service"]
     second = await sign(client, headers, tenant, issuer["identity"]["id"], wallet)
     assert second["sign"]["version"] == 2 and second["sign"]["did"] == did
     lines = (await client.get(f"/ids/{slug}/did.jsonl")).text.splitlines()
@@ -243,16 +244,16 @@ async def test_the_did_document_names_the_mediator(
 
     await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
     await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
-    mediator_did = (await client.get(f"{base}/mediators/{mediator['id']}", headers=headers)).json()[
-        "did"
-    ]
     detail = (await client.get(f"{base}/identities/{identity_id}", headers=headers)).json()
     assert detail["used_by"][0]["kind"] == "tenant"
     assert [s for s in detail["document"]["service"] if s["type"] != "LinkedDomains"] == [
         {
             "id": f"{detail['document']['id']}#didcomm",
             "type": "DIDCommMessaging",
-            "serviceEndpoint": {"uri": mediator_did, "accept": ["didcomm/v2"]},
+            "serviceEndpoint": {
+                "uri": "did:web:mediator.example.org",
+                "accept": ["didcomm/v2"],
+            },
         }
     ]
 

@@ -11,7 +11,9 @@
    only, as for signing it.
 3. ``POST …/issuance/sign``: a wallet request (``purpose: sign``, kind
    `credential`) for the signer's wallet to sign the SD-JWT VC built from the
-   draft; its answer issues the credential (`routes.wallet`).
+   draft; its answer issues the credential (`routes.wallet`). It names its
+   entry in the issuer's status list, which must have been signed first
+   (`routes.status_lists`), where it can later be suspended or revoked.
 """
 
 import uuid
@@ -23,7 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import answers as checks
-from registry_api import credential_catalog, issuance, presentations
+from registry_api import credential_catalog, issuance, presentations, status_lists
 from registry_api import field_catalog as catalog
 from registry_api.api.routes.applications import _received, content
 from registry_api.api.routes.auth import CurrentSession, DbSession, as_utc
@@ -35,14 +37,14 @@ from registry_api.api.routes.wallet import (
     my_keys,
     new_sign_request,
 )
-from registry_api.models import Application, Issuer, Tenant
+from registry_api.models import Application, Issuer, StatusList, Tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}/applications", tags=["applications"])
 
 VALIDITY = timedelta(days=365)
 
 
-async def _signing_key(db: AsyncSession, issuer: Issuer, user_id: uuid.UUID) -> str | None:
+async def signing_key(db: AsyncSession, issuer: Issuer, user_id: uuid.UUID) -> str | None:
     """The key `user_id` would sign the issuer's credentials with: theirs, and
     one the issuer's DID lists; `None` if they are not its signer or have none."""
     if issuer.signing != "single_user" or issuer.signer_id != user_id or not issuer.identity.did:
@@ -50,6 +52,14 @@ async def _signing_key(db: AsyncSession, issuer: Issuer, user_id: uuid.UUID) -> 
     listed = {name for name, _ in await presentations.issuer_keys(db, issuer.identity.did)}
     mine = [key for key in await my_keys(db, user_id) if key in listed]
     return mine[0] if mine else None
+
+
+async def status_list_for(db: AsyncSession, item: Application, issuer: Issuer) -> StatusList | None:
+    """The list the application's credential goes in: the one it holds an
+    index in already, or the issuer's current one; `None` if it has none."""
+    if item.status_list_id is not None:
+        return await db.get(StatusList, item.status_list_id)
+    return await status_lists.current(db, issuer)
 
 
 async def _accepted(
@@ -83,7 +93,7 @@ async def proposal(
         if item.credential_valid_until
         else datetime.now(UTC) + VALIDITY
     )
-    key = await _signing_key(db, issuer, session.user_id)
+    key = await signing_key(db, issuer, session.user_id)
     return {
         "credential_type": credential_catalog.type_out(kind),
         "claims": [
@@ -99,7 +109,14 @@ async def proposal(
         # The one asking signs, or why not.
         "can_sign": key is not None,
         "signer_needed": issuer.signing != "single_user" or issuer.signer_id is None,
+        # Its status list must be signed first (`…/issuers/{id}/status-lists/sign`).
+        "status_list_ready": await _list_ready(db, item, issuer),
     }
+
+
+async def _list_ready(db: AsyncSession, item: Application, issuer: Issuer) -> bool:
+    found = await status_list_for(db, item, issuer)
+    return found is not None and not await status_lists.needs_signing(db, found, issuer)
 
 
 class IssuanceIn(BaseModel):
@@ -127,7 +144,7 @@ async def save_draft(
     db: DbSession,
 ) -> dict[str, Any]:
     item, issuer = await _accepted(db, tenant_id, application_id)
-    if await _signing_key(db, issuer, session.user_id) is None:
+    if await signing_key(db, issuer, session.user_id) is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_the_issuers_signer")
     if body.valid_until <= datetime.now(UTC).date():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="valid_until_invalid")
@@ -165,7 +182,8 @@ async def save_draft(
     responses={
         status.HTTP_403_FORBIDDEN: {"description": "`not_the_issuers_signer`"},
         status.HTTP_409_CONFLICT: {
-            "description": "`not_accepted`, `already_issued`, `no_draft`, `not_paired`"
+            "description": "`not_accepted`, `already_issued`, `no_draft`, `not_paired`, "
+            "`status_list_unsigned`: the issuer's status list is to be signed first"
         },
     },
 )
@@ -181,9 +199,13 @@ async def ask_signature(
         raise HTTPException(status.HTTP_409_CONFLICT, detail="no_draft")
     if item.holder_did is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="not_paired")
-    key = await _signing_key(db, issuer, session.user_id)
+    key = await signing_key(db, issuer, session.user_id)
     if key is None or issuer.identity.did is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_the_issuers_signer")
+    listed = await status_list_for(db, item, issuer)
+    if listed is None or await status_lists.needs_signing(db, listed, issuer):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="status_list_unsigned")
+    index = await status_lists.reserve(db, item, listed)
     valid_until = as_utc(item.credential_valid_until)
     signed = issuance.document(
         issuer=issuer.identity.did,
@@ -192,6 +214,7 @@ async def ask_signature(
         holder=item.holder_did,
         claims=item.issuance_claims,
         valid_until=valid_until,
+        status={"status_list": {"idx": index, "uri": status_lists.uri(listed)}},
     )
     tenant = await db.get_one(Tenant, tenant_id)
     sign = SignObject(

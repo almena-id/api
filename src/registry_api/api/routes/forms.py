@@ -109,27 +109,29 @@ class FormOut(BaseModel):
     updated_at: datetime
 
 
-def _refuse(code: str) -> HTTPException:
-    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=code)
+def _refuse(code: str, field: int | None = None) -> HTTPException:
+    """A refusal; one about a field says which (`field`: its index in `fields`)."""
+    detail: str | dict[str, Any] = code if field is None else {"code": code, "field": field}
+    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
 
 
-def _narrow(item: catalog.Field, narrow: Narrow) -> dict[str, Any]:
+def _narrow(item: catalog.Field, narrow: Narrow, index: int) -> dict[str, Any]:
     stored = narrow.model_dump(mode="json", exclude_none=True)
     if not stored:
         return {}
     if set(stored) - catalog.NARROWING.get(item.type, set()):
-        raise _refuse("field_narrow_invalid")
+        raise _refuse("field_narrow_invalid", index)
     if narrow.values is not None:
         allowed = catalog.domain_values(item)
         # In the domain's order, whatever order they came in.
         values = [value for value in allowed if value in narrow.values]
         if not values or len(values) != len(narrow.values):
-            raise _refuse("field_narrow_invalid")
+            raise _refuse("field_narrow_invalid", index)
         stored["values"] = values
     if narrow.min_date and narrow.max_date and narrow.min_date > narrow.max_date:
-        raise _refuse("field_narrow_invalid")
+        raise _refuse("field_narrow_invalid", index)
     if narrow.max_length and item.max_length and narrow.max_length > item.max_length:
-        raise _refuse("field_narrow_invalid")
+        raise _refuse("field_narrow_invalid", index)
     return stored
 
 
@@ -141,27 +143,31 @@ def _key(ref: str) -> str:
     return ref.removeprefix(PREFIX)
 
 
-def _field(field: FormField, custom: Fields) -> tuple[str, dict[str, Any]]:
+def _field(field: FormField, custom: Fields, index: int) -> tuple[str, dict[str, Any]]:
     """The field's key in the form and the field as stored, or why it cannot be."""
     item = catalog.BY_ID.get(field.ref) or custom.get(field.ref)
     if item is None:
-        raise _refuse("field_unknown")
+        raise _refuse("field_unknown", index)
     if field.as_ is not None:
         if not item.repeatable:
-            raise _refuse("field_rename_invalid")
+            raise _refuse("field_rename_invalid", index)
         if not KEY.match(field.as_):
-            raise _refuse("field_key_invalid")
+            raise _refuse("field_key_invalid", index)
     stored = field.model_dump(mode="json", by_alias=True, exclude_none=True, exclude={"narrow"})
-    narrow = _narrow(item, field.narrow) if field.narrow else {}
+    narrow = _narrow(item, field.narrow, index) if field.narrow else {}
     if narrow:
         stored["narrow"] = narrow
     return field.as_ or _key(field.ref), stored
 
 
 def _fields(fields: list[FormField], custom: Fields) -> list[dict[str, Any]]:
-    keyed = [_field(field, custom) for field in fields]
-    if len({key for key, _ in keyed}) != len(keyed):
-        raise _refuse("field_key_duplicate")
+    keyed = [_field(field, custom, index) for index, field in enumerate(fields)]
+    seen: set[str] = set()
+    for index, (key, _) in enumerate(keyed):
+        if key in seen:
+            # The one that repeats a key taken before it.
+            raise _refuse("field_key_duplicate", index)
+        seen.add(key)
     return [stored for _, stored in keyed]
 
 
@@ -252,7 +258,8 @@ async def list_forms(tenant_id: TenantId, db: DbSession) -> list[FormOut]:
             "`field_unknown`, `field_rename_invalid`, `field_key_invalid`, "
             "`field_key_duplicate`, `field_narrow_invalid`, `credential_unknown`, "
             "`credential_key_invalid`, `credential_key_duplicate`, `credential_type_duplicate`, "
-            "`credential_claims_invalid` or `credential_trust_invalid`"
+            "`credential_claims_invalid` or `credential_trust_invalid`; one about a field or a "
+            "credential comes as `{code, field}` or `{code, credential}`, its index in the list"
         },
     },
 )
@@ -335,18 +342,10 @@ class VerifyOut(BaseModel):
     credentials: list[Verified]
 
 
-@router.post(
-    "/{form_id}/verify",
-    summary="Verify the credentials presented for a form (an OpenID4VP vp_token)",
-    responses={status.HTTP_404_NOT_FOUND: {"description": "`form_not_found`"}},
-)
-async def verify_presentations(
-    tenant_id: TenantId, form_id: uuid.UUID, body: VerifyIn, db: DbSession, fetch: StatusFetch
-) -> VerifyOut:
-    form = await _owned(db, tenant_id, form_id)
-    checked = await presentations.verify(
-        db, form.credentials, body.vp_token, nonce=body.nonce, audience=body.audience, fetch=fetch
-    )
+def verdict(form: Form, checked: list[presentations.Checked]) -> VerifyOut:
+    """What was presented for `form`, as the API checked it: each credential it
+    asks for, and whether the whole holds — every required one presented and
+    verified, and nothing presented that failed."""
     filled = form_credentials.fills(form.credentials, form.fields)
     required = {entry["key"] for entry in form.credentials if entry["required"]}
     results = [
@@ -373,3 +372,18 @@ async def verify_presentations(
         ),
         credentials=results,
     )
+
+
+@router.post(
+    "/{form_id}/verify",
+    summary="Verify the credentials presented for a form (an OpenID4VP vp_token)",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "`form_not_found`"}},
+)
+async def verify_presentations(
+    tenant_id: TenantId, form_id: uuid.UUID, body: VerifyIn, db: DbSession, fetch: StatusFetch
+) -> VerifyOut:
+    form = await _owned(db, tenant_id, form_id)
+    checked = await presentations.verify(
+        db, form.credentials, body.vp_token, nonce=body.nonce, audience=body.audience, fetch=fetch
+    )
+    return verdict(form, checked)

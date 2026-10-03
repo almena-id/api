@@ -4,7 +4,8 @@ from httpx import AsyncClient
 from sqlalchemy.exc import OperationalError
 
 from registry_api import __version__
-from registry_api.api.routes.home import FONTS
+from registry_api.api.routes.home import FONTS, page
+from registry_api.config import get_settings
 from registry_api.db import get_session
 from registry_api.main import app
 
@@ -56,3 +57,18 @@ async def test_every_font_the_page_asks_for_is_served(client: AsyncClient) -> No
 async def test_unknown_fonts_are_not_found(client: AsyncClient) -> None:
     assert (await client.get("/fonts/OFL-inter.txt")).status_code == 404
     assert (await client.get("/fonts/..%2Fmain.py")).status_code == 404
+
+
+async def test_home_names_the_api_and_links_its_reference(client: AsyncClient) -> None:
+    html = (await client.get("/")).text
+    assert "<h1>Almena <span>API</span></h1>" in html
+    assert "Registry API" not in html
+    settings = get_settings()
+    assert f'<dt>Docu URL</dt><dd><a href="{settings.public_url}/docs">' in html
+
+
+def test_home_omits_the_docu_url_when_the_reference_is_off() -> None:
+    settings = get_settings().model_copy(update={"environment": "production"})
+    html = page(ready=True, version=__version__, settings=settings, year=2026)
+    assert "Docu URL" not in html
+    assert "Base URL" in html

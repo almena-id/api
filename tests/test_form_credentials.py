@@ -125,13 +125,21 @@ async def test_a_credential_request_must_hold(client: AsyncClient, outbox: Outbo
             headers=headers,
         )
         assert response.status_code == 422, response.text
-        detail: str = response.json()["detail"]
-        return detail
+        detail = response.json()["detail"]
+        code: str = detail if isinstance(detail, str) else detail["code"]
+        return code
 
     assert await refused([]) == "fields_required"
     assert await refused([{"type": "passport"}]) == "credential_unknown"
     assert await refused([{"type": "pid", "key": "My ID"}]) == "credential_key_invalid"
     assert await refused([{"type": "pid"}, {"type": "pid"}]) == "credential_key_duplicate"
+    # Which request does not hold: its index in the list.
+    which = await client.post(
+        base,
+        json={"name": {"en": "X"}, "credentials": [{"type": "pid"}, {"type": "passport"}]},
+        headers=headers,
+    )
+    assert which.json()["detail"] == {"code": "credential_unknown", "credential": 1}
     assert await refused([{"type": "pid", "claims": ["member_number"]}]) == (
         "credential_claims_invalid"
     )

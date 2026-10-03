@@ -1,3 +1,5 @@
+from typing import Any
+
 from httpx import AsyncClient
 
 from registry_api import credential_catalog as credentials
@@ -101,3 +103,113 @@ async def test_an_issuer_declares_what_it_grants(client: AsyncClient, outbox: Ou
 
     eve, _ = await _sign_in(client, outbox, "eve@example.org")
     assert (await client.get(url, headers=eve)).status_code == 404
+
+
+async def test_the_public_catalogue_lists_every_offer_page_by_page(
+    client: AsyncClient, outbox: Outbox
+) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@acme.com")
+    issuers = f"/api/v1/tenants/{tenant}/issuers"
+    form = (
+        await client.post(
+            f"/api/v1/tenants/{tenant}/forms",
+            json={"name": {"en": "Apply"}, "fields": [{"ref": "given_name"}]},
+            headers=headers,
+        )
+    ).json()
+    wallet = await ready(client, headers, tenant)
+
+    async def issuer(name: str, forms: list[str], published: bool = True) -> dict[str, Any]:
+        created: dict[str, Any] = (
+            await client.post(issuers, json={"name": name}, headers=headers)
+        ).json()
+        saved = await client.put(
+            f"{issuers}/{created['id']}/credential-types",
+            json={
+                "types": ["employment", "membership"],
+                "forms": {t: form["id"] for t in forms},
+            },
+            headers=headers,
+        )
+        assert saved.status_code == 200, saved.text
+        await sign(client, headers, tenant, created["identity"]["id"], wallet)
+        if published:
+            await publish(client, headers, tenant, "issuers", created["id"], wallet)
+        return created
+
+    # Granted without a form, or not published: not offered.
+    await issuer("Old club", ["employment", "membership"], published=False)
+    await issuer("Union", ["employment", "membership"])
+    await issuer("Club", ["membership"])
+
+    seen: list[tuple[str, str]] = []
+    cursor: str | None = None
+    while True:
+        query = "?limit=2" + (f"&cursor={cursor}" if cursor else "")
+        page = await client.get(f"/api/v1/catalog/offers{query}")
+        assert page.status_code == 200, page.text
+        body = page.json()
+        assert body["total"] == 3
+        seen += [(o["issuer"]["name"], o["credential_type"]["id"]) for o in body["items"]]
+        cursor = body["next_cursor"]
+        if not cursor:
+            break
+    # Newest issuer first; each issuer's types in the order it grants them.
+    assert seen == [("Club", "membership"), ("Union", "employment"), ("Union", "membership")]
+
+    first = (await client.get("/api/v1/catalog/offers")).json()["items"][0]
+    assert first["issuer"]["slug"].startswith("iss")
+    assert first["issuer"]["did"]
+    assert first["credential_type"]["labels"]["en"]
+    assert first["credential_type"]["category"] == {
+        "id": "membership",
+        "labels": {"en": "Membership", "es": "Afiliación"},
+    }
+    bad = await client.get("/api/v1/catalog/offers?cursor=nope")
+    assert bad.status_code == 400 and bad.json()["detail"] == "invalid_cursor"
+
+
+async def test_the_catalogue_finds_issuers_by_what_they_grant_and_their_name(
+    client: AsyncClient, outbox: Outbox
+) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@acme.com")
+    issuers = f"/api/v1/tenants/{tenant}/issuers"
+    wallet = await ready(client, headers, tenant)
+
+    async def issuer(name: str, types: list[str]) -> dict[str, Any]:
+        created: dict[str, Any] = (
+            await client.post(issuers, json={"name": name}, headers=headers)
+        ).json()
+        await client.put(
+            f"{issuers}/{created['id']}/credential-types", json={"types": types}, headers=headers
+        )
+        await sign(client, headers, tenant, created["identity"]["id"], wallet)
+        await publish(client, headers, tenant, "issuers", created["id"], wallet)
+        return created
+
+    await issuer("North Gym", ["membership"])
+    await issuer("Union of Teachers", ["membership", "employment"])
+    await issuer("City Hall", ["residence"])
+    await issuer("South Gym", ["membership"])
+
+    async def names(query: str) -> list[str]:
+        found: list[str] = []
+        cursor = ""
+        while True:
+            page = await client.get(f"/api/v1/catalog/issuers?limit=1{query}{cursor}")
+            assert page.status_code == 200, page.text
+            found += [item["name"] for item in page.json()["items"]]
+            if not page.json()["next_cursor"]:
+                return found
+            cursor = f"&cursor={page.json()['next_cursor']}"
+
+    # Newest first, a page of one at a time, only those granting the type.
+    assert await names("&grants=membership") == ["South Gym", "Union of Teachers", "North Gym"]
+    assert await names("&grants=membership&q=gYm") == ["South Gym", "North Gym"]
+    assert await names("&q=hall") == ["City Hall"]
+    assert await names("&q=%25") == []
+    assert await names("&grants=enrollment") == []
+    hall = (await client.get("/api/v1/catalog/issuers?q=hall")).json()["items"][0]
+    assert await names(f"&q={hall['did'][-12:]}") == ["City Hall"]
+    refused = await client.get("/api/v1/catalog/verifiers?grants=membership")
+    assert refused.status_code == 422 and refused.json()["detail"] == "grants_issuers_only"

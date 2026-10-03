@@ -11,7 +11,7 @@ from tests.conftest import Outbox
 from tests.fake_wallet import FakeWallet
 from tests.test_presentations import Issuer, _issuer, sd_jwt
 
-PORTAL = "https://registry.almena.id"
+PORTAL = "https://catalog.almena.id"
 
 
 async def _offer(client: AsyncClient, outbox: Outbox) -> tuple[Issuer, Issuer, dict[str, str], str]:
