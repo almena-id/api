@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from registry_api import tenant_health
+from registry_api import entitlements, tenant_health
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import IdentityRef, MediatorRef, TenantId, tenant_mediator
 from registry_api.api.routes.members import admin_of
 from registry_api.api.routes.signing import Signer, signer_out
+from registry_api.field_catalog import LANGUAGES
 from registry_api.models import Identity, Mediator, Tenant, TenantMember
 from registry_api.signing_flows import Flow, signs
 
@@ -28,6 +29,13 @@ class TenantOut(BaseModel):
     # Whether they sign as the tenant under its flow (a wallet aside): the
     # portal offers them signing and publishing.
     signs: bool
+    # The trust anchor (the root): its catalogue is everyone's
+    # (`registry_api.trust_anchor`).
+    anchor: bool
+    # What its subscription lets it do (`registry_api.entitlements`).
+    features: list[str]
+    # The languages it works in, of the platform's, in the platform's order.
+    languages: list[str]
 
 
 class TenantDetail(TenantOut):
@@ -47,6 +55,19 @@ class TenantIn(BaseModel):
     signing_flow: Flow | None = None
     # `single_user`: the member who signs.
     signer_id: uuid.UUID | None = None
+    # Of the platform's languages, one at least; the trust anchor's are all.
+    languages: list[str] | None = Field(default=None, max_length=len(LANGUAGES))
+
+
+def _languages(given: list[str], anchor: bool) -> list[str]:
+    """The languages as kept, in the platform's order, or why they cannot be:
+    none, one the platform does not speak, one twice — or, for the trust
+    anchor, any short of all (`languages_anchor`)."""
+    if not given or len(set(given)) != len(given) or set(given) - set(LANGUAGES):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="languages_invalid")
+    if anchor and set(given) != set(LANGUAGES):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="languages_anchor")
+    return [lang for lang in LANGUAGES if lang in given]
 
 
 async def _detail(db: DbSession, tenant: Tenant, role: str, user_id: uuid.UUID) -> TenantDetail:
@@ -58,7 +79,12 @@ async def _detail(db: DbSession, tenant: Tenant, role: str, user_id: uuid.UUID) 
         created_at=tenant.created_at,
         role=role,
         signs=await signs(db, tenant, user_id),
-        identity=IdentityRef(id=identity.id, name=identity.name) if identity else None,
+        anchor=tenant.root,
+        features=await entitlements.features(db, tenant),
+        languages=tenant.languages,
+        identity=IdentityRef(id=identity.id, name=identity.name, did=identity.did)
+        if identity
+        else None,
         mediator=MediatorRef(
             id=mediator.id, name=mediator.name, own=mediator.tenant_id == tenant.id
         )
@@ -84,6 +110,9 @@ async def list_tenants(session: CurrentSession, db: DbSession) -> list[TenantOut
             created_at=t.created_at,
             role=role,
             signs=await signs(db, t, session.user_id),
+            anchor=t.root,
+            features=await entitlements.features(db, t),
+            languages=t.languages,
         )
         for t, role in rows
     ]
@@ -97,13 +126,15 @@ async def get_tenant(tenant_id: TenantId, session: CurrentSession, db: DbSession
 
 @router.patch(
     "/{tenant_id}",
-    summary="Change a tenant's name, mediator or signing flow (admins only)",
+    summary="Change a tenant's name, mediator, signing flow or languages (admins only)",
     responses={
         status.HTTP_403_FORBIDDEN: {"description": "`not_admin`"},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "description": "`name_required`, `mediator_not_found` (neither the tenant's nor a "
             "public one), "
-            "`signer_required` (`single_user` with nobody), `signer_not_member`"
+            "`signer_required` (`single_user` with nobody), `signer_not_member`, "
+            "`languages_invalid` (none, repeated or not the platform's), "
+            "`languages_anchor` (the trust anchor works in all of them)"
         },
     },
 )
@@ -125,6 +156,8 @@ async def update_tenant(
             if identity is not None and identity.name == tenant.name:
                 identity.name = name
         tenant.name = name
+    if "languages" in sent:
+        tenant.languages = _languages(body.languages or [], tenant.root)
     if "mediator_id" in sent:
         tenant.mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
     if "signer_id" in sent and body.signer_id is not None:

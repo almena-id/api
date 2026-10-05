@@ -1,7 +1,9 @@
 from httpx import AsyncClient
 
+from registry_api.field_catalog import LANGUAGES
 from tests.conftest import Dns, Outbox
 from tests.mediators import new_mediator
+from tests.subscriptions import ANCHOR
 
 
 async def _sign_in(client: AsyncClient, outbox: Outbox, email: str) -> dict[str, str]:
@@ -137,3 +139,66 @@ async def test_one_member_can_be_the_tenants_signer(client: AsyncClient, outbox:
 
     back = await client.patch(url, json={"signing_flow": "any_admin"}, headers=ada)
     assert back.json()["signer"] is None and back.json()["signs"] is True
+
+
+async def test_a_new_tenant_works_in_its_creators_language(
+    client: AsyncClient, outbox: Outbox
+) -> None:
+    await client.post("/api/v1/auth/code", json={"email": "eva@example.org", "locale": "es"})
+    response = await client.post(
+        "/api/v1/auth/verify",
+        json={"email": "eva@example.org", "code": outbox.last_code(), "locale": "es"},
+    )
+    eva = {"Authorization": f"Bearer {response.json()['token']}"}
+    body = (await client.get(f"/api/v1/tenants/{await _tenant(client, eva)}", headers=eva)).json()
+    assert body["languages"] == ["es"]
+
+
+async def test_admins_choose_the_tenants_languages(client: AsyncClient, outbox: Outbox) -> None:
+    ada = await _sign_in(client, outbox, "ada@example.org")
+    url = f"/api/v1/tenants/{await _tenant(client, ada)}"
+    assert (await client.get(url, headers=ada)).json()["languages"] == ["en"]
+
+    # Kept in the platform's order, whatever the order sent.
+    response = await client.patch(url, json={"languages": ["es", "en"]}, headers=ada)
+    assert response.status_code == 200, response.text
+    assert response.json()["languages"] == ["en", "es"]
+    assert (await client.get("/api/v1/tenants", headers=ada)).json()[0]["languages"] == [
+        "en",
+        "es",
+    ]
+    response = await client.patch(url, json={"languages": ["es"]}, headers=ada)
+    assert response.json()["languages"] == ["es"]
+
+    for wrong in ([], ["fr"], ["es", "es"]):
+        response = await client.patch(url, json={"languages": wrong}, headers=ada)
+        assert response.status_code == 422
+        assert response.json()["detail"] == "languages_invalid"
+
+
+async def test_members_do_not_choose_the_languages(client: AsyncClient, outbox: Outbox) -> None:
+    ada = await _sign_in(client, outbox, "ada@example.org")
+    tenant = await _tenant(client, ada)
+    invited = await client.post(
+        f"/api/v1/tenants/{tenant}/invitations",
+        json={"email": "bob@example.org", "role": "member"},
+        headers=ada,
+    )
+    assert invited.status_code < 300, invited.text
+    bob = await _sign_in(client, outbox, "bob@example.org")
+    response = await client.patch(
+        f"/api/v1/tenants/{tenant}", json={"languages": ["en", "es"]}, headers=bob
+    )
+    assert response.status_code == 403
+
+
+async def test_the_anchor_works_in_every_language(client: AsyncClient, outbox: Outbox) -> None:
+    headers = await _sign_in(client, outbox, ANCHOR)
+    url = f"/api/v1/tenants/{await _tenant(client, headers)}"
+    assert (await client.get(url, headers=headers)).json()["languages"] == list(LANGUAGES)
+
+    response = await client.patch(url, json={"languages": ["en"]}, headers=headers)
+    assert response.status_code == 422
+    assert response.json()["detail"] == "languages_anchor"
+    response = await client.patch(url, json={"languages": list(LANGUAGES)}, headers=headers)
+    assert response.status_code == 200

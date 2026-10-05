@@ -3,7 +3,7 @@
 import uuid
 from typing import Literal
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint, Uuid, text
+from sqlalchemy import JSON, Boolean, ForeignKey, Index, String, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from registry_api.models.base import Base, TimestampMixin, slug_column
@@ -39,7 +39,8 @@ class Tenant(TimestampMixin, Base):
         ForeignKey("identities.id", ondelete="SET NULL", use_alter=True),
         index=True,
     )
-    # The root authority: Almena, created once at install (`registry-api
+    # The root authority and trust anchor (Almena Trust Anchor), whose catalogue
+    # every tenant uses (`registry_api.trust_anchor`); created once at install (`registry-api
     # init-root`). Its identity is the identity domain's own DID.
     root: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # The mediator the tenant's own identity receives messages through: one of
@@ -59,6 +60,11 @@ class Tenant(TimestampMixin, Base):
     signer_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
+    # The languages it works in, of the platform's (`field_catalog.LANGUAGES`),
+    # in the platform's order: one at least. A new tenant starts with the one
+    # its creator signed up in; the trust anchor has them all, always — its
+    # catalogue is everyone's, named in every one.
+    languages: Mapped[list[str]] = mapped_column(JSON, default=lambda: ["en"])
 
 
 class TenantMember(TimestampMixin, Base):

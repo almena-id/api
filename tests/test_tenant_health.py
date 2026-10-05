@@ -145,6 +145,7 @@ async def test_a_public_mediator_is_offered_to_every_tenant(
     assert kept["mediator"]["id"] == public
 
 
+@pytest.mark.no_anchor
 async def test_new_tenants_start_with_the_roots_mediator(
     client: AsyncClient, outbox: Outbox, db: AsyncSession
 ) -> None:

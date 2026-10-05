@@ -14,7 +14,9 @@ from registry_api.db import get_session
 from registry_api.dns_proof import get_txt_lookup
 from registry_api.mail import Mailer, get_mailer
 from registry_api.main import app
-from registry_api.models import Base
+from registry_api.models import Base, Tenant
+from registry_api.root import create_root
+from registry_api.trust_anchor import ANCHOR_NAME
 from registry_api.vault import get_vault
 from registry_api.vault.memory import MemoryVault
 
@@ -25,9 +27,11 @@ class Outbox(Mailer):
     def __init__(self) -> None:
         super().__init__(get_settings())
         self.sent: list[tuple[str, str, str]] = []
+        self.html: list[str | None] = []
 
-    async def send(self, to: str, subject: str, body: str) -> None:
+    async def send(self, to: str, subject: str, body: str, html: str | None = None) -> None:
         self.sent.append((to, subject, body))
+        self.html.append(html)
 
     def last_code(self) -> str:
         match = re.search(r"\b(\d{6})\b", self.sent[-1][2])
@@ -59,6 +63,19 @@ async def database() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     app.dependency_overrides[get_session] = override
     yield sessionmaker
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+async def anchor(
+    request: pytest.FixtureRequest, database: async_sessionmaker[AsyncSession]
+) -> Tenant | None:
+    """The trust anchor, made as `registry-api init-root` makes it: the root,
+    with Almena's catalogue. `@pytest.mark.no_anchor` leaves it out."""
+    if request.node.get_closest_marker("no_anchor"):
+        return None
+    async with database() as session:
+        tenant, _ = await create_root(session, ANCHOR_NAME, "anchor@example.net")
+        return tenant
 
 
 @pytest.fixture(autouse=True)

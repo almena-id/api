@@ -117,6 +117,12 @@ tasks:
     cmds:
       - uv run alembic upgrade head
 
+  db:root:
+    desc: Create the root tenant (Almena Trust Anchor, with Almena's catalogue), its admin user@almena.id; once (after task db:migrate)
+    deps: [install]
+    cmds:
+      - uv run registry-api init-root --admin user@almena.id
+
   db:revision:
     desc: 'Autogenerate a migration from the models (task db:revision -- "add users")'
     deps: [install]

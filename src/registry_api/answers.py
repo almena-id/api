@@ -1,6 +1,6 @@
 """Checking what a holder types into a form, field by field.
 
-A form's fields are the catalogue's (Almena's, or the tenant's own); each
+A form's fields are the catalogue's (the trust anchor's, or the tenant's own); each
 answer must meet its field's format — the type, its bounds, its value domain —
 and what the form narrows. Fields a verified credential filled are not typed:
 their values come from the credential. Files are uploaded on their own and
@@ -19,8 +19,9 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import field_catalog as catalog
-from registry_api.api.routes.custom_fields import PREFIX, custom_catalog
+from registry_api import trust_anchor
 from registry_api.models import Form
+from registry_api.trust_anchor import PREFIX
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -35,10 +36,10 @@ async def fields_of(
 ) -> list[tuple[str, dict[str, Any], catalog.Field]]:
     """The form's fields in order: their key, as the form keeps them, and the
     catalogue field each is."""
-    custom = await custom_catalog(db, form.tenant_id)
+    known = (await trust_anchor.load(db, form.tenant_id)).fields
     found = []
     for stored in form.fields:
-        item = catalog.BY_ID.get(stored["ref"]) or custom.get(stored["ref"])
+        item = known.get(stored["ref"])
         if item is not None:
             found.append((key_of(stored), stored, item))
     return found

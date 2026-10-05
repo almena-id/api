@@ -40,6 +40,7 @@ from registry_api.api.routes.wallet import (
 )
 from registry_api.broker import Broker, BrokerError, get_broker
 from registry_api.models import Identity, Issuer, Mediator, Tenant, Verifier
+from registry_api.trust_anchor import PREFIX
 from registry_api.vault import Vault, VaultError, get_vault
 
 logger = logging.getLogger(__name__)
@@ -223,7 +224,8 @@ class Entry(BaseModel):
     did: str
     name: str
     # Issuers and verifiers carry one; mediators do not.
-    description: str | None = None
+    # By language.
+    description: dict[str, str] | None = None
     # Mediators: where they listen.
     url: str | None = None
     # Issuers: their slug (where their offers are), the credential types they
@@ -265,7 +267,12 @@ async def _tenant(db: DbSession, tenant_id: uuid.UUID) -> TenantPublic:
 @catalog.get(
     "/{kind}",
     summary="Public: the published issuers, verifiers or mediators, newest first",
-    responses={422: {"description": "`grants_issuers_only`: `grants` filters issuers"}},
+    responses={
+        422: {
+            "description": "`grants_issuers_only`: `grants` filters issuers; "
+            "`tenant_required`: a tenant's own type (`custom:{key}`) is named in its tenant"
+        }
+    },
 )
 async def list_published(
     kind: Kind,
@@ -274,16 +281,23 @@ async def list_published(
     cursor: Annotated[str | None, Query(max_length=200)] = None,
     q: Annotated[str | None, Query(max_length=100)] = None,
     grants: Annotated[str | None, Query(max_length=64)] = None,
+    tenant: Annotated[str | None, Query(max_length=255)] = None,
 ) -> CatalogPage:
     model = MODELS[kind]
     if grants and kind != "issuers":
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="grants_issuers_only")
+    if grants and grants.startswith(PREFIX) and not tenant:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="tenant_required")
     # Only what resolves: published, under a DID that has been signed.
     query = (
         select(model)
         .join(Identity, Identity.id == model.identity_id)
         .where(model.published_at.is_not(None), Identity.did.is_not(None))
     )
+    # Only a tenant's, by its DID (its own identity's).
+    if tenant:
+        owners = select(Tenant.id).join(Identity, Identity.id == Tenant.identity_id)
+        query = query.where(model.tenant_id.in_(owners.where(Identity.did == tenant)))
     # Searching: a part of its name, whatever the case, or of its DID.
     text = (q or "").strip()
     if text:

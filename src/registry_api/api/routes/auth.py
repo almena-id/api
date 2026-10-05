@@ -248,12 +248,18 @@ async def check_code(db: AsyncSession, email: str, code: str) -> None:
 
 
 async def new_tenant(
-    db: AsyncSession, name: str | None, identity_name: str | None = None
+    db: AsyncSession,
+    name: str | None,
+    identity_name: str | None = None,
+    languages: list[str] | None = None,
 ) -> Tenant:
     """A tenant, with its own identity named like it (or `identity_name`,
-    unnamed), receiving messages through the default mediator (the root's)."""
+    unnamed), receiving messages through the default mediator (the root's),
+    working in `languages` (its creator's, English when unsaid)."""
     mediator = await default_mediator(db)
-    tenant = Tenant(name=name, mediator_id=mediator.id if mediator else None)
+    tenant = Tenant(
+        name=name, mediator_id=mediator.id if mediator else None, languages=languages or ["en"]
+    )
     db.add(tenant)
     await db.flush()
     identity = Identity(
@@ -288,7 +294,7 @@ async def _user_for_email(db: AsyncSession, email: str, locale: Locale = "en") -
             # A new account starts with a tenant of its own, named after it and
             # run by it, so there is always one to work in — unless somebody
             # already asked it into theirs: then that is the one it works in.
-            tenant = await new_tenant(db, default_tenant_name(email, locale))
+            tenant = await new_tenant(db, default_tenant_name(email, locale), languages=[locale])
             db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="admin"))
         await db.flush()
         await db.refresh(user)

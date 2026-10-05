@@ -1,0 +1,4242 @@
+{
+ "version": "v1",
+ "categories": [
+  {
+   "kind": "field",
+   "key": "person",
+   "labels": {
+    "en": "Person",
+    "es": "Persona"
+   }
+  },
+  {
+   "kind": "field",
+   "key": "contact",
+   "labels": {
+    "en": "Contact",
+    "es": "Contacto"
+   }
+  },
+  {
+   "kind": "field",
+   "key": "document",
+   "labels": {
+    "en": "Documents",
+    "es": "Documentos"
+   }
+  },
+  {
+   "kind": "field",
+   "key": "education",
+   "labels": {
+    "en": "Education and work",
+    "es": "Formación y trabajo"
+   }
+  },
+  {
+   "kind": "field",
+   "key": "membership",
+   "labels": {
+    "en": "Membership",
+    "es": "Afiliación"
+   }
+  },
+  {
+   "kind": "field",
+   "key": "file",
+   "labels": {
+    "en": "Files",
+    "es": "Ficheros"
+   }
+  },
+  {
+   "kind": "credential",
+   "key": "identity",
+   "labels": {
+    "en": "Identity",
+    "es": "Identidad"
+   }
+  },
+  {
+   "kind": "credential",
+   "key": "contact",
+   "labels": {
+    "en": "Contact",
+    "es": "Contacto"
+   }
+  },
+  {
+   "kind": "credential",
+   "key": "education",
+   "labels": {
+    "en": "Education",
+    "es": "Formación"
+   }
+  },
+  {
+   "kind": "credential",
+   "key": "work",
+   "labels": {
+    "en": "Work",
+    "es": "Trabajo"
+   }
+  },
+  {
+   "kind": "credential",
+   "key": "membership",
+   "labels": {
+    "en": "Membership",
+    "es": "Afiliación"
+   }
+  }
+ ],
+ "domains": [
+  {
+   "key": "country",
+   "labels": {
+    "en": "Countries",
+    "es": "Países"
+   },
+   "source": "ISO 3166-1 alpha-2",
+   "codes": [
+    {
+     "value": "AD",
+     "labels": {
+      "en": "Andorra",
+      "es": "Andorra"
+     }
+    },
+    {
+     "value": "AE",
+     "labels": {
+      "en": "United Arab Emirates",
+      "es": "Emiratos Árabes Unidos"
+     }
+    },
+    {
+     "value": "AF",
+     "labels": {
+      "en": "Afghanistan",
+      "es": "Afganistán"
+     }
+    },
+    {
+     "value": "AG",
+     "labels": {
+      "en": "Antigua and Barbuda",
+      "es": "Antigua y Barbuda"
+     }
+    },
+    {
+     "value": "AI",
+     "labels": {
+      "en": "Anguilla",
+      "es": "Anguila"
+     }
+    },
+    {
+     "value": "AL",
+     "labels": {
+      "en": "Albania",
+      "es": "Albania"
+     }
+    },
+    {
+     "value": "AM",
+     "labels": {
+      "en": "Armenia",
+      "es": "Armenia"
+     }
+    },
+    {
+     "value": "AO",
+     "labels": {
+      "en": "Angola",
+      "es": "Angola"
+     }
+    },
+    {
+     "value": "AQ",
+     "labels": {
+      "en": "Antarctica",
+      "es": "Antártida"
+     }
+    },
+    {
+     "value": "AR",
+     "labels": {
+      "en": "Argentina",
+      "es": "Argentina"
+     }
+    },
+    {
+     "value": "AS",
+     "labels": {
+      "en": "American Samoa",
+      "es": "Samoa Estadounidense"
+     }
+    },
+    {
+     "value": "AT",
+     "labels": {
+      "en": "Austria",
+      "es": "Austria"
+     }
+    },
+    {
+     "value": "AU",
+     "labels": {
+      "en": "Australia",
+      "es": "Australia"
+     }
+    },
+    {
+     "value": "AW",
+     "labels": {
+      "en": "Aruba",
+      "es": "Aruba"
+     }
+    },
+    {
+     "value": "AX",
+     "labels": {
+      "en": "Åland Islands",
+      "es": "Islas Äland"
+     }
+    },
+    {
+     "value": "AZ",
+     "labels": {
+      "en": "Azerbaijan",
+      "es": "Azerbaiyán"
+     }
+    },
+    {
+     "value": "BA",
+     "labels": {
+      "en": "Bosnia and Herzegovina",
+      "es": "Bosnia y Herzegovina"
+     }
+    },
+    {
+     "value": "BB",
+     "labels": {
+      "en": "Barbados",
+      "es": "Barbados"
+     }
+    },
+    {
+     "value": "BD",
+     "labels": {
+      "en": "Bangladesh",
+      "es": "Bangladés"
+     }
+    },
+    {
+     "value": "BE",
+     "labels": {
+      "en": "Belgium",
+      "es": "Bélgica"
+     }
+    },
+    {
+     "value": "BF",
+     "labels": {
+      "en": "Burkina Faso",
+      "es": "Burquina Faso"
+     }
+    },
+    {
+     "value": "BG",
+     "labels": {
+      "en": "Bulgaria",
+      "es": "Bulgaria"
+     }
+    },
+    {
+     "value": "BH",
+     "labels": {
+      "en": "Bahrain",
+      "es": "Baréin"
+     }
+    },
+    {
+     "value": "BI",
+     "labels": {
+      "en": "Burundi",
+      "es": "Burundi"
+     }
+    },
+    {
+     "value": "BJ",
+     "labels": {
+      "en": "Benin",
+      "es": "Benín"
+     }
+    },
+    {
+     "value": "BL",
+     "labels": {
+      "en": "Saint Barthélemy",
+      "es": "San Bartolomé"
+     }
+    },
+    {
+     "value": "BM",
+     "labels": {
+      "en": "Bermuda",
+      "es": "Islas Bermudas"
+     }
+    },
+    {
+     "value": "BN",
+     "labels": {
+      "en": "Brunei Darussalam",
+      "es": "Brunei Darussalam"
+     }
+    },
+    {
+     "value": "BO",
+     "labels": {
+      "en": "Bolivia",
+      "es": "Bolivia, Estado plurinacional de"
+     }
+    },
+    {
+     "value": "BQ",
+     "labels": {
+      "en": "Bonaire, Sint Eustatius and Saba",
+      "es": "Islas BES (Caribe Neerlandés)"
+     }
+    },
+    {
+     "value": "BR",
+     "labels": {
+      "en": "Brazil",
+      "es": "Brasil"
+     }
+    },
+    {
+     "value": "BS",
+     "labels": {
+      "en": "Bahamas",
+      "es": "Bahamas"
+     }
+    },
+    {
+     "value": "BT",
+     "labels": {
+      "en": "Bhutan",
+      "es": "Bután"
+     }
+    },
+    {
+     "value": "BV",
+     "labels": {
+      "en": "Bouvet Island",
+      "es": "Isla Bouvet"
+     }
+    },
+    {
+     "value": "BW",
+     "labels": {
+      "en": "Botswana",
+      "es": "Botsuana"
+     }
+    },
+    {
+     "value": "BY",
+     "labels": {
+      "en": "Belarus",
+      "es": "Bielorrusia"
+     }
+    },
+    {
+     "value": "BZ",
+     "labels": {
+      "en": "Belize",
+      "es": "Belice"
+     }
+    },
+    {
+     "value": "CA",
+     "labels": {
+      "en": "Canada",
+      "es": "Canadá"
+     }
+    },
+    {
+     "value": "CC",
+     "labels": {
+      "en": "Cocos (Keeling) Islands",
+      "es": "Islas Cocos (Keeling)"
+     }
+    },
+    {
+     "value": "CD",
+     "labels": {
+      "en": "Congo, The Democratic Republic of the",
+      "es": "Congo, República Democrática del"
+     }
+    },
+    {
+     "value": "CF",
+     "labels": {
+      "en": "Central African Republic",
+      "es": "República Centroafricana"
+     }
+    },
+    {
+     "value": "CG",
+     "labels": {
+      "en": "Congo",
+      "es": "Congo"
+     }
+    },
+    {
+     "value": "CH",
+     "labels": {
+      "en": "Switzerland",
+      "es": "Suiza"
+     }
+    },
+    {
+     "value": "CI",
+     "labels": {
+      "en": "Côte d'Ivoire",
+      "es": "Costa de Marfíl"
+     }
+    },
+    {
+     "value": "CK",
+     "labels": {
+      "en": "Cook Islands",
+      "es": "Islas Cook"
+     }
+    },
+    {
+     "value": "CL",
+     "labels": {
+      "en": "Chile",
+      "es": "Chile"
+     }
+    },
+    {
+     "value": "CM",
+     "labels": {
+      "en": "Cameroon",
+      "es": "Camerún"
+     }
+    },
+    {
+     "value": "CN",
+     "labels": {
+      "en": "China",
+      "es": "China"
+     }
+    },
+    {
+     "value": "CO",
+     "labels": {
+      "en": "Colombia",
+      "es": "Colombia"
+     }
+    },
+    {
+     "value": "CR",
+     "labels": {
+      "en": "Costa Rica",
+      "es": "Costa Rica"
+     }
+    },
+    {
+     "value": "CU",
+     "labels": {
+      "en": "Cuba",
+      "es": "Cuba"
+     }
+    },
+    {
+     "value": "CV",
+     "labels": {
+      "en": "Cabo Verde",
+      "es": "Cabo Verde"
+     }
+    },
+    {
+     "value": "CW",
+     "labels": {
+      "en": "Curaçao",
+      "es": "Curazao"
+     }
+    },
+    {
+     "value": "CX",
+     "labels": {
+      "en": "Christmas Island",
+      "es": "Isla de Navidad"
+     }
+    },
+    {
+     "value": "CY",
+     "labels": {
+      "en": "Cyprus",
+      "es": "Chipre"
+     }
+    },
+    {
+     "value": "CZ",
+     "labels": {
+      "en": "Czechia",
+      "es": "Chequia"
+     }
+    },
+    {
+     "value": "DE",
+     "labels": {
+      "en": "Germany",
+      "es": "Alemania"
+     }
+    },
+    {
+     "value": "DJ",
+     "labels": {
+      "en": "Djibouti",
+      "es": "Yibuti"
+     }
+    },
+    {
+     "value": "DK",
+     "labels": {
+      "en": "Denmark",
+      "es": "Dinamarca"
+     }
+    },
+    {
+     "value": "DM",
+     "labels": {
+      "en": "Dominica",
+      "es": "Dominica"
+     }
+    },
+    {
+     "value": "DO",
+     "labels": {
+      "en": "Dominican Republic",
+      "es": "República Dominicana"
+     }
+    },
+    {
+     "value": "DZ",
+     "labels": {
+      "en": "Algeria",
+      "es": "Algeria"
+     }
+    },
+    {
+     "value": "EC",
+     "labels": {
+      "en": "Ecuador",
+      "es": "Ecuador"
+     }
+    },
+    {
+     "value": "EE",
+     "labels": {
+      "en": "Estonia",
+      "es": "Estonia"
+     }
+    },
+    {
+     "value": "EG",
+     "labels": {
+      "en": "Egypt",
+      "es": "Egipto"
+     }
+    },
+    {
+     "value": "EH",
+     "labels": {
+      "en": "Western Sahara",
+      "es": "Sahara Occidental"
+     }
+    },
+    {
+     "value": "ER",
+     "labels": {
+      "en": "Eritrea",
+      "es": "Eritrea"
+     }
+    },
+    {
+     "value": "ES",
+     "labels": {
+      "en": "Spain",
+      "es": "España"
+     }
+    },
+    {
+     "value": "ET",
+     "labels": {
+      "en": "Ethiopia",
+      "es": "Etiopía"
+     }
+    },
+    {
+     "value": "FI",
+     "labels": {
+      "en": "Finland",
+      "es": "Finlandia"
+     }
+    },
+    {
+     "value": "FJ",
+     "labels": {
+      "en": "Fiji",
+      "es": "Fiyi"
+     }
+    },
+    {
+     "value": "FK",
+     "labels": {
+      "en": "Falkland Islands (Malvinas)",
+      "es": "Islas Falkland (Malvinas)"
+     }
+    },
+    {
+     "value": "FM",
+     "labels": {
+      "en": "Micronesia, Federated States of",
+      "es": "Micronesia, Estados Federados de"
+     }
+    },
+    {
+     "value": "FO",
+     "labels": {
+      "en": "Faroe Islands",
+      "es": "Islas Feroe"
+     }
+    },
+    {
+     "value": "FR",
+     "labels": {
+      "en": "France",
+      "es": "Francia"
+     }
+    },
+    {
+     "value": "GA",
+     "labels": {
+      "en": "Gabon",
+      "es": "Gabón"
+     }
+    },
+    {
+     "value": "GB",
+     "labels": {
+      "en": "United Kingdom",
+      "es": "Reino Unido"
+     }
+    },
+    {
+     "value": "GD",
+     "labels": {
+      "en": "Grenada",
+      "es": "Granada"
+     }
+    },
+    {
+     "value": "GE",
+     "labels": {
+      "en": "Georgia",
+      "es": "Georgia"
+     }
+    },
+    {
+     "value": "GF",
+     "labels": {
+      "en": "French Guiana",
+      "es": "Guayana Francesa"
+     }
+    },
+    {
+     "value": "GG",
+     "labels": {
+      "en": "Guernsey",
+      "es": "Guernsey"
+     }
+    },
+    {
+     "value": "GH",
+     "labels": {
+      "en": "Ghana",
+      "es": "Ghana"
+     }
+    },
+    {
+     "value": "GI",
+     "labels": {
+      "en": "Gibraltar",
+      "es": "Gibraltar"
+     }
+    },
+    {
+     "value": "GL",
+     "labels": {
+      "en": "Greenland",
+      "es": "Groenlandia"
+     }
+    },
+    {
+     "value": "GM",
+     "labels": {
+      "en": "Gambia",
+      "es": "Gambia"
+     }
+    },
+    {
+     "value": "GN",
+     "labels": {
+      "en": "Guinea",
+      "es": "Guinea"
+     }
+    },
+    {
+     "value": "GP",
+     "labels": {
+      "en": "Guadeloupe",
+      "es": "Guadalupe"
+     }
+    },
+    {
+     "value": "GQ",
+     "labels": {
+      "en": "Equatorial Guinea",
+      "es": "Guinea Ecuatorial"
+     }
+    },
+    {
+     "value": "GR",
+     "labels": {
+      "en": "Greece",
+      "es": "Grecia"
+     }
+    },
+    {
+     "value": "GS",
+     "labels": {
+      "en": "South Georgia and the South Sandwich Islands",
+      "es": "Islas Georgias del Sur y Sándwich del Sur"
+     }
+    },
+    {
+     "value": "GT",
+     "labels": {
+      "en": "Guatemala",
+      "es": "Guatemala"
+     }
+    },
+    {
+     "value": "GU",
+     "labels": {
+      "en": "Guam",
+      "es": "Guam"
+     }
+    },
+    {
+     "value": "GW",
+     "labels": {
+      "en": "Guinea-Bissau",
+      "es": "Guinea-Bisáu"
+     }
+    },
+    {
+     "value": "GY",
+     "labels": {
+      "en": "Guyana",
+      "es": "Guyana"
+     }
+    },
+    {
+     "value": "HK",
+     "labels": {
+      "en": "Hong Kong",
+      "es": "Hong Kong"
+     }
+    },
+    {
+     "value": "HM",
+     "labels": {
+      "en": "Heard Island and McDonald Islands",
+      "es": "Isla Heard e Islas McDonald"
+     }
+    },
+    {
+     "value": "HN",
+     "labels": {
+      "en": "Honduras",
+      "es": "Honduras"
+     }
+    },
+    {
+     "value": "HR",
+     "labels": {
+      "en": "Croatia",
+      "es": "Croacia"
+     }
+    },
+    {
+     "value": "HT",
+     "labels": {
+      "en": "Haiti",
+      "es": "Haití"
+     }
+    },
+    {
+     "value": "HU",
+     "labels": {
+      "en": "Hungary",
+      "es": "Hungría"
+     }
+    },
+    {
+     "value": "ID",
+     "labels": {
+      "en": "Indonesia",
+      "es": "Indonesia"
+     }
+    },
+    {
+     "value": "IE",
+     "labels": {
+      "en": "Ireland",
+      "es": "Irlanda"
+     }
+    },
+    {
+     "value": "IL",
+     "labels": {
+      "en": "Israel",
+      "es": "Israel"
+     }
+    },
+    {
+     "value": "IM",
+     "labels": {
+      "en": "Isle of Man",
+      "es": "Isla de Man"
+     }
+    },
+    {
+     "value": "IN",
+     "labels": {
+      "en": "India",
+      "es": "India"
+     }
+    },
+    {
+     "value": "IO",
+     "labels": {
+      "en": "British Indian Ocean Territory",
+      "es": "Territorio Británico del Océano Índico"
+     }
+    },
+    {
+     "value": "IQ",
+     "labels": {
+      "en": "Iraq",
+      "es": "Irak"
+     }
+    },
+    {
+     "value": "IR",
+     "labels": {
+      "en": "Iran",
+      "es": "Irán"
+     }
+    },
+    {
+     "value": "IS",
+     "labels": {
+      "en": "Iceland",
+      "es": "Islandia"
+     }
+    },
+    {
+     "value": "IT",
+     "labels": {
+      "en": "Italy",
+      "es": "Italia"
+     }
+    },
+    {
+     "value": "JE",
+     "labels": {
+      "en": "Jersey",
+      "es": "Jersey"
+     }
+    },
+    {
+     "value": "JM",
+     "labels": {
+      "en": "Jamaica",
+      "es": "Jamaica"
+     }
+    },
+    {
+     "value": "JO",
+     "labels": {
+      "en": "Jordan",
+      "es": "Jordania"
+     }
+    },
+    {
+     "value": "JP",
+     "labels": {
+      "en": "Japan",
+      "es": "Japón"
+     }
+    },
+    {
+     "value": "KE",
+     "labels": {
+      "en": "Kenya",
+      "es": "Kenia"
+     }
+    },
+    {
+     "value": "KG",
+     "labels": {
+      "en": "Kyrgyzstan",
+      "es": "Kirguistán"
+     }
+    },
+    {
+     "value": "KH",
+     "labels": {
+      "en": "Cambodia",
+      "es": "Camboya"
+     }
+    },
+    {
+     "value": "KI",
+     "labels": {
+      "en": "Kiribati",
+      "es": "Kiribati"
+     }
+    },
+    {
+     "value": "KM",
+     "labels": {
+      "en": "Comoros",
+      "es": "Comores, Islas"
+     }
+    },
+    {
+     "value": "KN",
+     "labels": {
+      "en": "Saint Kitts and Nevis",
+      "es": "San Cristóbal y Nieves"
+     }
+    },
+    {
+     "value": "KP",
+     "labels": {
+      "en": "North Korea",
+      "es": "Corea del Norte"
+     }
+    },
+    {
+     "value": "KR",
+     "labels": {
+      "en": "South Korea",
+      "es": "Corea del Sur"
+     }
+    },
+    {
+     "value": "KW",
+     "labels": {
+      "en": "Kuwait",
+      "es": "Kuwait"
+     }
+    },
+    {
+     "value": "KY",
+     "labels": {
+      "en": "Cayman Islands",
+      "es": "Islas Caimán"
+     }
+    },
+    {
+     "value": "KZ",
+     "labels": {
+      "en": "Kazakhstan",
+      "es": "Kazajistán"
+     }
+    },
+    {
+     "value": "LA",
+     "labels": {
+      "en": "Laos",
+      "es": "República Democrática Popular de Lao"
+     }
+    },
+    {
+     "value": "LB",
+     "labels": {
+      "en": "Lebanon",
+      "es": "Líbano"
+     }
+    },
+    {
+     "value": "LC",
+     "labels": {
+      "en": "Saint Lucia",
+      "es": "Santa Lucía"
+     }
+    },
+    {
+     "value": "LI",
+     "labels": {
+      "en": "Liechtenstein",
+      "es": "Liechtenstein"
+     }
+    },
+    {
+     "value": "LK",
+     "labels": {
+      "en": "Sri Lanka",
+      "es": "Sri Lanka"
+     }
+    },
+    {
+     "value": "LR",
+     "labels": {
+      "en": "Liberia",
+      "es": "Liberia"
+     }
+    },
+    {
+     "value": "LS",
+     "labels": {
+      "en": "Lesotho",
+      "es": "Lesoto"
+     }
+    },
+    {
+     "value": "LT",
+     "labels": {
+      "en": "Lithuania",
+      "es": "Lituania"
+     }
+    },
+    {
+     "value": "LU",
+     "labels": {
+      "en": "Luxembourg",
+      "es": "Luxemburgo"
+     }
+    },
+    {
+     "value": "LV",
+     "labels": {
+      "en": "Latvia",
+      "es": "Letonia"
+     }
+    },
+    {
+     "value": "LY",
+     "labels": {
+      "en": "Libya",
+      "es": "Libia"
+     }
+    },
+    {
+     "value": "MA",
+     "labels": {
+      "en": "Morocco",
+      "es": "Marruecos"
+     }
+    },
+    {
+     "value": "MC",
+     "labels": {
+      "en": "Monaco",
+      "es": "Mónaco"
+     }
+    },
+    {
+     "value": "MD",
+     "labels": {
+      "en": "Moldova",
+      "es": "Moldavia"
+     }
+    },
+    {
+     "value": "ME",
+     "labels": {
+      "en": "Montenegro",
+      "es": "Montenegro"
+     }
+    },
+    {
+     "value": "MF",
+     "labels": {
+      "en": "Saint Martin (French part)",
+      "es": "San Martín (zona francesa)"
+     }
+    },
+    {
+     "value": "MG",
+     "labels": {
+      "en": "Madagascar",
+      "es": "Madagascar"
+     }
+    },
+    {
+     "value": "MH",
+     "labels": {
+      "en": "Marshall Islands",
+      "es": "Islas Marshall"
+     }
+    },
+    {
+     "value": "MK",
+     "labels": {
+      "en": "North Macedonia",
+      "es": "Macedonia del Norte"
+     }
+    },
+    {
+     "value": "ML",
+     "labels": {
+      "en": "Mali",
+      "es": "Malí"
+     }
+    },
+    {
+     "value": "MM",
+     "labels": {
+      "en": "Myanmar",
+      "es": "Birmania"
+     }
+    },
+    {
+     "value": "MN",
+     "labels": {
+      "en": "Mongolia",
+      "es": "Mongolia"
+     }
+    },
+    {
+     "value": "MO",
+     "labels": {
+      "en": "Macao",
+      "es": "Macao"
+     }
+    },
+    {
+     "value": "MP",
+     "labels": {
+      "en": "Northern Mariana Islands",
+      "es": "Islas Marianas del Norte"
+     }
+    },
+    {
+     "value": "MQ",
+     "labels": {
+      "en": "Martinique",
+      "es": "Martinica"
+     }
+    },
+    {
+     "value": "MR",
+     "labels": {
+      "en": "Mauritania",
+      "es": "Mauritania"
+     }
+    },
+    {
+     "value": "MS",
+     "labels": {
+      "en": "Montserrat",
+      "es": "Montserrat"
+     }
+    },
+    {
+     "value": "MT",
+     "labels": {
+      "en": "Malta",
+      "es": "Malta"
+     }
+    },
+    {
+     "value": "MU",
+     "labels": {
+      "en": "Mauritius",
+      "es": "Mauricio"
+     }
+    },
+    {
+     "value": "MV",
+     "labels": {
+      "en": "Maldives",
+      "es": "Islas Maldivas"
+     }
+    },
+    {
+     "value": "MW",
+     "labels": {
+      "en": "Malawi",
+      "es": "Malaui"
+     }
+    },
+    {
+     "value": "MX",
+     "labels": {
+      "en": "Mexico",
+      "es": "México"
+     }
+    },
+    {
+     "value": "MY",
+     "labels": {
+      "en": "Malaysia",
+      "es": "Malasia"
+     }
+    },
+    {
+     "value": "MZ",
+     "labels": {
+      "en": "Mozambique",
+      "es": "Mozambique"
+     }
+    },
+    {
+     "value": "NA",
+     "labels": {
+      "en": "Namibia",
+      "es": "Namibia"
+     }
+    },
+    {
+     "value": "NC",
+     "labels": {
+      "en": "New Caledonia",
+      "es": "Nueva Caledonia"
+     }
+    },
+    {
+     "value": "NE",
+     "labels": {
+      "en": "Niger",
+      "es": "Niger"
+     }
+    },
+    {
+     "value": "NF",
+     "labels": {
+      "en": "Norfolk Island",
+      "es": "Isla Norfolk"
+     }
+    },
+    {
+     "value": "NG",
+     "labels": {
+      "en": "Nigeria",
+      "es": "Nigeria"
+     }
+    },
+    {
+     "value": "NI",
+     "labels": {
+      "en": "Nicaragua",
+      "es": "Nicaragua"
+     }
+    },
+    {
+     "value": "NL",
+     "labels": {
+      "en": "Netherlands",
+      "es": "Países Bajos"
+     }
+    },
+    {
+     "value": "NO",
+     "labels": {
+      "en": "Norway",
+      "es": "Noruega"
+     }
+    },
+    {
+     "value": "NP",
+     "labels": {
+      "en": "Nepal",
+      "es": "Nepal"
+     }
+    },
+    {
+     "value": "NR",
+     "labels": {
+      "en": "Nauru",
+      "es": "Nauru"
+     }
+    },
+    {
+     "value": "NU",
+     "labels": {
+      "en": "Niue",
+      "es": "Niue"
+     }
+    },
+    {
+     "value": "NZ",
+     "labels": {
+      "en": "New Zealand",
+      "es": "Nueva Zelanda"
+     }
+    },
+    {
+     "value": "OM",
+     "labels": {
+      "en": "Oman",
+      "es": "Omán"
+     }
+    },
+    {
+     "value": "PA",
+     "labels": {
+      "en": "Panama",
+      "es": "Panamá"
+     }
+    },
+    {
+     "value": "PE",
+     "labels": {
+      "en": "Peru",
+      "es": "Perú"
+     }
+    },
+    {
+     "value": "PF",
+     "labels": {
+      "en": "French Polynesia",
+      "es": "Polinesia Francesa"
+     }
+    },
+    {
+     "value": "PG",
+     "labels": {
+      "en": "Papua New Guinea",
+      "es": "Papúa Nueva Guinea"
+     }
+    },
+    {
+     "value": "PH",
+     "labels": {
+      "en": "Philippines",
+      "es": "Filipinas"
+     }
+    },
+    {
+     "value": "PK",
+     "labels": {
+      "en": "Pakistan",
+      "es": "Pakistán"
+     }
+    },
+    {
+     "value": "PL",
+     "labels": {
+      "en": "Poland",
+      "es": "Polonia"
+     }
+    },
+    {
+     "value": "PM",
+     "labels": {
+      "en": "Saint Pierre and Miquelon",
+      "es": "San Pedro y Miquelon"
+     }
+    },
+    {
+     "value": "PN",
+     "labels": {
+      "en": "Pitcairn",
+      "es": "Pitcairn"
+     }
+    },
+    {
+     "value": "PR",
+     "labels": {
+      "en": "Puerto Rico",
+      "es": "Puerto Rico"
+     }
+    },
+    {
+     "value": "PS",
+     "labels": {
+      "en": "Palestine, State of",
+      "es": "Palestina, Estado de"
+     }
+    },
+    {
+     "value": "PT",
+     "labels": {
+      "en": "Portugal",
+      "es": "Portugal"
+     }
+    },
+    {
+     "value": "PW",
+     "labels": {
+      "en": "Palau",
+      "es": "Palaos"
+     }
+    },
+    {
+     "value": "PY",
+     "labels": {
+      "en": "Paraguay",
+      "es": "Paraguay"
+     }
+    },
+    {
+     "value": "QA",
+     "labels": {
+      "en": "Qatar",
+      "es": "Catar"
+     }
+    },
+    {
+     "value": "RE",
+     "labels": {
+      "en": "Réunion",
+      "es": "Reunión"
+     }
+    },
+    {
+     "value": "RO",
+     "labels": {
+      "en": "Romania",
+      "es": "Rumanía"
+     }
+    },
+    {
+     "value": "RS",
+     "labels": {
+      "en": "Serbia",
+      "es": "Serbia"
+     }
+    },
+    {
+     "value": "RU",
+     "labels": {
+      "en": "Russian Federation",
+      "es": "Federación Rusa"
+     }
+    },
+    {
+     "value": "RW",
+     "labels": {
+      "en": "Rwanda",
+      "es": "Ruanda"
+     }
+    },
+    {
+     "value": "SA",
+     "labels": {
+      "en": "Saudi Arabia",
+      "es": "Arabia Saudí"
+     }
+    },
+    {
+     "value": "SB",
+     "labels": {
+      "en": "Solomon Islands",
+      "es": "Islas Salomón"
+     }
+    },
+    {
+     "value": "SC",
+     "labels": {
+      "en": "Seychelles",
+      "es": "Seychelles"
+     }
+    },
+    {
+     "value": "SD",
+     "labels": {
+      "en": "Sudan",
+      "es": "Sudán"
+     }
+    },
+    {
+     "value": "SE",
+     "labels": {
+      "en": "Sweden",
+      "es": "Suecia"
+     }
+    },
+    {
+     "value": "SG",
+     "labels": {
+      "en": "Singapore",
+      "es": "Singapur"
+     }
+    },
+    {
+     "value": "SH",
+     "labels": {
+      "en": "Saint Helena, Ascension and Tristan da Cunha",
+      "es": "Santa Elena, Ascensión y Tristán de Acuña"
+     }
+    },
+    {
+     "value": "SI",
+     "labels": {
+      "en": "Slovenia",
+      "es": "Eslovenia"
+     }
+    },
+    {
+     "value": "SJ",
+     "labels": {
+      "en": "Svalbard and Jan Mayen",
+      "es": "Svalbard y Jan Mayen"
+     }
+    },
+    {
+     "value": "SK",
+     "labels": {
+      "en": "Slovakia",
+      "es": "Eslovaquia"
+     }
+    },
+    {
+     "value": "SL",
+     "labels": {
+      "en": "Sierra Leone",
+      "es": "Sierra Leona"
+     }
+    },
+    {
+     "value": "SM",
+     "labels": {
+      "en": "San Marino",
+      "es": "San Marino"
+     }
+    },
+    {
+     "value": "SN",
+     "labels": {
+      "en": "Senegal",
+      "es": "Senegal"
+     }
+    },
+    {
+     "value": "SO",
+     "labels": {
+      "en": "Somalia",
+      "es": "Somalia"
+     }
+    },
+    {
+     "value": "SR",
+     "labels": {
+      "en": "Suriname",
+      "es": "Surinám"
+     }
+    },
+    {
+     "value": "SS",
+     "labels": {
+      "en": "South Sudan",
+      "es": "Sudán del Sur"
+     }
+    },
+    {
+     "value": "ST",
+     "labels": {
+      "en": "Sao Tome and Principe",
+      "es": "Santo Tomé y Príncipe"
+     }
+    },
+    {
+     "value": "SV",
+     "labels": {
+      "en": "El Salvador",
+      "es": "El Salvador"
+     }
+    },
+    {
+     "value": "SX",
+     "labels": {
+      "en": "Sint Maarten (Dutch part)",
+      "es": "Isla de San Martín (zona holandesa)"
+     }
+    },
+    {
+     "value": "SY",
+     "labels": {
+      "en": "Syria",
+      "es": "Siria"
+     }
+    },
+    {
+     "value": "SZ",
+     "labels": {
+      "en": "Eswatini",
+      "es": "Esuatini"
+     }
+    },
+    {
+     "value": "TC",
+     "labels": {
+      "en": "Turks and Caicos Islands",
+      "es": "Islas Turcas y Caicos"
+     }
+    },
+    {
+     "value": "TD",
+     "labels": {
+      "en": "Chad",
+      "es": "Chad"
+     }
+    },
+    {
+     "value": "TF",
+     "labels": {
+      "en": "French Southern Territories",
+      "es": "Territorios Franceses del Sur"
+     }
+    },
+    {
+     "value": "TG",
+     "labels": {
+      "en": "Togo",
+      "es": "Togo"
+     }
+    },
+    {
+     "value": "TH",
+     "labels": {
+      "en": "Thailand",
+      "es": "Tailandia"
+     }
+    },
+    {
+     "value": "TJ",
+     "labels": {
+      "en": "Tajikistan",
+      "es": "Tayikistán"
+     }
+    },
+    {
+     "value": "TK",
+     "labels": {
+      "en": "Tokelau",
+      "es": "Tokelau"
+     }
+    },
+    {
+     "value": "TL",
+     "labels": {
+      "en": "Timor-Leste",
+      "es": "Timor Oriental"
+     }
+    },
+    {
+     "value": "TM",
+     "labels": {
+      "en": "Turkmenistan",
+      "es": "Turkmenistán"
+     }
+    },
+    {
+     "value": "TN",
+     "labels": {
+      "en": "Tunisia",
+      "es": "Tunez"
+     }
+    },
+    {
+     "value": "TO",
+     "labels": {
+      "en": "Tonga",
+      "es": "Tonga"
+     }
+    },
+    {
+     "value": "TR",
+     "labels": {
+      "en": "Türkiye",
+      "es": "Turquía"
+     }
+    },
+    {
+     "value": "TT",
+     "labels": {
+      "en": "Trinidad and Tobago",
+      "es": "Trinidad y Tobago"
+     }
+    },
+    {
+     "value": "TV",
+     "labels": {
+      "en": "Tuvalu",
+      "es": "Tuvalu"
+     }
+    },
+    {
+     "value": "TW",
+     "labels": {
+      "en": "Taiwan",
+      "es": "Taiwán"
+     }
+    },
+    {
+     "value": "TZ",
+     "labels": {
+      "en": "Tanzania",
+      "es": "Tanzania, República unida de"
+     }
+    },
+    {
+     "value": "UA",
+     "labels": {
+      "en": "Ukraine",
+      "es": "Ucrania"
+     }
+    },
+    {
+     "value": "UG",
+     "labels": {
+      "en": "Uganda",
+      "es": "Uganda"
+     }
+    },
+    {
+     "value": "UM",
+     "labels": {
+      "en": "United States Minor Outlying Islands",
+      "es": "Islas Ultramarinas Menores de Estados Unidos"
+     }
+    },
+    {
+     "value": "US",
+     "labels": {
+      "en": "United States",
+      "es": "Estados Unidos"
+     }
+    },
+    {
+     "value": "UY",
+     "labels": {
+      "en": "Uruguay",
+      "es": "Uruguay"
+     }
+    },
+    {
+     "value": "UZ",
+     "labels": {
+      "en": "Uzbekistan",
+      "es": "Uzbekistán"
+     }
+    },
+    {
+     "value": "VA",
+     "labels": {
+      "en": "Holy See (Vatican City State)",
+      "es": "Santa Sede (Ciudad Estado del Vaticano)"
+     }
+    },
+    {
+     "value": "VC",
+     "labels": {
+      "en": "Saint Vincent and the Grenadines",
+      "es": "San Vicente y las Granadinas"
+     }
+    },
+    {
+     "value": "VE",
+     "labels": {
+      "en": "Venezuela",
+      "es": "Venezuela, República Bolivariana de"
+     }
+    },
+    {
+     "value": "VG",
+     "labels": {
+      "en": "Virgin Islands, British",
+      "es": "Islas Vírgenes, Británicas"
+     }
+    },
+    {
+     "value": "VI",
+     "labels": {
+      "en": "Virgin Islands, U.S.",
+      "es": "Islas Vírgenes, de EEUU."
+     }
+    },
+    {
+     "value": "VN",
+     "labels": {
+      "en": "Vietnam",
+      "es": "Vietnam"
+     }
+    },
+    {
+     "value": "VU",
+     "labels": {
+      "en": "Vanuatu",
+      "es": "Vanuatu"
+     }
+    },
+    {
+     "value": "WF",
+     "labels": {
+      "en": "Wallis and Futuna",
+      "es": "Wallis y Futuna"
+     }
+    },
+    {
+     "value": "WS",
+     "labels": {
+      "en": "Samoa",
+      "es": "Samoa"
+     }
+    },
+    {
+     "value": "YE",
+     "labels": {
+      "en": "Yemen",
+      "es": "Yemen"
+     }
+    },
+    {
+     "value": "YT",
+     "labels": {
+      "en": "Mayotte",
+      "es": "Mayotte"
+     }
+    },
+    {
+     "value": "ZA",
+     "labels": {
+      "en": "South Africa",
+      "es": "Sudáfrica"
+     }
+    },
+    {
+     "value": "ZM",
+     "labels": {
+      "en": "Zambia",
+      "es": "Zambia"
+     }
+    },
+    {
+     "value": "ZW",
+     "labels": {
+      "en": "Zimbabwe",
+      "es": "Zimbabue"
+     }
+    }
+   ]
+  },
+  {
+   "key": "language",
+   "labels": {
+    "en": "Languages",
+    "es": "Idiomas"
+   },
+   "source": "ISO 639-1",
+   "codes": [
+    {
+     "value": "aa",
+     "labels": {
+      "en": "Afar",
+      "es": "Afar"
+     }
+    },
+    {
+     "value": "ab",
+     "labels": {
+      "en": "Abkhazian",
+      "es": "Abjaziano"
+     }
+    },
+    {
+     "value": "ae",
+     "labels": {
+      "en": "Avestan",
+      "es": "Avestan"
+     }
+    },
+    {
+     "value": "af",
+     "labels": {
+      "en": "Afrikaans",
+      "es": "Afrikaans"
+     }
+    },
+    {
+     "value": "ak",
+     "labels": {
+      "en": "Akan",
+      "es": "Akan"
+     }
+    },
+    {
+     "value": "am",
+     "labels": {
+      "en": "Amharic",
+      "es": "Ámárico"
+     }
+    },
+    {
+     "value": "an",
+     "labels": {
+      "en": "Aragonese",
+      "es": "Aragonés"
+     }
+    },
+    {
+     "value": "ar",
+     "labels": {
+      "en": "Arabic",
+      "es": "Árábe"
+     }
+    },
+    {
+     "value": "as",
+     "labels": {
+      "en": "Assamese",
+      "es": "Assamais"
+     }
+    },
+    {
+     "value": "av",
+     "labels": {
+      "en": "Avaric",
+      "es": "Avaric"
+     }
+    },
+    {
+     "value": "ay",
+     "labels": {
+      "en": "Aymara",
+      "es": "Aymará"
+     }
+    },
+    {
+     "value": "az",
+     "labels": {
+      "en": "Azerbaijani",
+      "es": "Azerbayano"
+     }
+    },
+    {
+     "value": "ba",
+     "labels": {
+      "en": "Bashkir",
+      "es": "Bashkir"
+     }
+    },
+    {
+     "value": "be",
+     "labels": {
+      "en": "Belarusian",
+      "es": "Bieloruso"
+     }
+    },
+    {
+     "value": "bg",
+     "labels": {
+      "en": "Bulgarian",
+      "es": "Búlgaro"
+     }
+    },
+    {
+     "value": "bi",
+     "labels": {
+      "en": "Bislama",
+      "es": "Bislama"
+     }
+    },
+    {
+     "value": "bm",
+     "labels": {
+      "en": "Bambara",
+      "es": "Bambara"
+     }
+    },
+    {
+     "value": "bn",
+     "labels": {
+      "en": "Bengali",
+      "es": "Bengalí"
+     }
+    },
+    {
+     "value": "bo",
+     "labels": {
+      "en": "Tibetan",
+      "es": "Tibetano"
+     }
+    },
+    {
+     "value": "br",
+     "labels": {
+      "en": "Breton",
+      "es": "Bretón"
+     }
+    },
+    {
+     "value": "bs",
+     "labels": {
+      "en": "Bosnian",
+      "es": "Bosnio"
+     }
+    },
+    {
+     "value": "ca",
+     "labels": {
+      "en": "Catalan",
+      "es": "Catalán"
+     }
+    },
+    {
+     "value": "ce",
+     "labels": {
+      "en": "Chechen",
+      "es": "Checheno"
+     }
+    },
+    {
+     "value": "ch",
+     "labels": {
+      "en": "Chamorro",
+      "es": "Chamorro"
+     }
+    },
+    {
+     "value": "co",
+     "labels": {
+      "en": "Corsican",
+      "es": "Corso"
+     }
+    },
+    {
+     "value": "cr",
+     "labels": {
+      "en": "Cree",
+      "es": "Cree"
+     }
+    },
+    {
+     "value": "cs",
+     "labels": {
+      "en": "Czech",
+      "es": "Checo"
+     }
+    },
+    {
+     "value": "cu",
+     "labels": {
+      "en": "Church Slavic",
+      "es": "Church Slavic"
+     }
+    },
+    {
+     "value": "cv",
+     "labels": {
+      "en": "Chuvash",
+      "es": "Chuvash"
+     }
+    },
+    {
+     "value": "cy",
+     "labels": {
+      "en": "Welsh",
+      "es": "Galés"
+     }
+    },
+    {
+     "value": "da",
+     "labels": {
+      "en": "Danish",
+      "es": "Danés"
+     }
+    },
+    {
+     "value": "de",
+     "labels": {
+      "en": "German",
+      "es": "Alemán"
+     }
+    },
+    {
+     "value": "dv",
+     "labels": {
+      "en": "Divehi",
+      "es": "Divehi"
+     }
+    },
+    {
+     "value": "dz",
+     "labels": {
+      "en": "Dzongkha",
+      "es": "Butaní"
+     }
+    },
+    {
+     "value": "ee",
+     "labels": {
+      "en": "Ewe",
+      "es": "Ewe"
+     }
+    },
+    {
+     "value": "el",
+     "labels": {
+      "en": "Modern Greek (1453-)",
+      "es": "Modern Greek (1453-)"
+     }
+    },
+    {
+     "value": "en",
+     "labels": {
+      "en": "English",
+      "es": "Inglés"
+     }
+    },
+    {
+     "value": "eo",
+     "labels": {
+      "en": "Esperanto",
+      "es": "Esperanto"
+     }
+    },
+    {
+     "value": "es",
+     "labels": {
+      "en": "Spanish",
+      "es": "Español"
+     }
+    },
+    {
+     "value": "et",
+     "labels": {
+      "en": "Estonian",
+      "es": "Estonio"
+     }
+    },
+    {
+     "value": "eu",
+     "labels": {
+      "en": "Basque",
+      "es": "Vasco"
+     }
+    },
+    {
+     "value": "fa",
+     "labels": {
+      "en": "Persian",
+      "es": "Persa"
+     }
+    },
+    {
+     "value": "ff",
+     "labels": {
+      "en": "Fulah",
+      "es": "Fulah"
+     }
+    },
+    {
+     "value": "fi",
+     "labels": {
+      "en": "Finnish",
+      "es": "Finés"
+     }
+    },
+    {
+     "value": "fj",
+     "labels": {
+      "en": "Fijian",
+      "es": "Fidji"
+     }
+    },
+    {
+     "value": "fo",
+     "labels": {
+      "en": "Faroese",
+      "es": "Feroés"
+     }
+    },
+    {
+     "value": "fr",
+     "labels": {
+      "en": "French",
+      "es": "Francés"
+     }
+    },
+    {
+     "value": "fy",
+     "labels": {
+      "en": "Western Frisian",
+      "es": "Western Frisian"
+     }
+    },
+    {
+     "value": "ga",
+     "labels": {
+      "en": "Irish",
+      "es": "Irlandés"
+     }
+    },
+    {
+     "value": "gd",
+     "labels": {
+      "en": "Scottish Gaelic",
+      "es": "Scottish Gaelic"
+     }
+    },
+    {
+     "value": "gl",
+     "labels": {
+      "en": "Galician",
+      "es": "Galician"
+     }
+    },
+    {
+     "value": "gn",
+     "labels": {
+      "en": "Guarani",
+      "es": "Guaraní"
+     }
+    },
+    {
+     "value": "gu",
+     "labels": {
+      "en": "Gujarati",
+      "es": "guyaratí"
+     }
+    },
+    {
+     "value": "gv",
+     "labels": {
+      "en": "Manx",
+      "es": "Manx [Gaélico de Manx]"
+     }
+    },
+    {
+     "value": "ha",
+     "labels": {
+      "en": "Hausa",
+      "es": "Haussa"
+     }
+    },
+    {
+     "value": "he",
+     "labels": {
+      "en": "Hebrew",
+      "es": "Hebreo"
+     }
+    },
+    {
+     "value": "hi",
+     "labels": {
+      "en": "Hindi",
+      "es": "Hindi"
+     }
+    },
+    {
+     "value": "ho",
+     "labels": {
+      "en": "Hiri Motu",
+      "es": "Hiri Motu"
+     }
+    },
+    {
+     "value": "hr",
+     "labels": {
+      "en": "Croatian",
+      "es": "Croata"
+     }
+    },
+    {
+     "value": "ht",
+     "labels": {
+      "en": "Haitian",
+      "es": "Haitian"
+     }
+    },
+    {
+     "value": "hu",
+     "labels": {
+      "en": "Hungarian",
+      "es": "Húngaro"
+     }
+    },
+    {
+     "value": "hy",
+     "labels": {
+      "en": "Armenian",
+      "es": "Armenio"
+     }
+    },
+    {
+     "value": "hz",
+     "labels": {
+      "en": "Herero",
+      "es": "Herero"
+     }
+    },
+    {
+     "value": "ia",
+     "labels": {
+      "en": "Interlingua (International Auxiliary Language Association)",
+      "es": "Interlingua (Asociación de la Lengua Auxiliar Internacional)"
+     }
+    },
+    {
+     "value": "id",
+     "labels": {
+      "en": "Indonesian",
+      "es": "Indonesio"
+     }
+    },
+    {
+     "value": "ie",
+     "labels": {
+      "en": "Interlingue",
+      "es": "Interlingue"
+     }
+    },
+    {
+     "value": "ig",
+     "labels": {
+      "en": "Igbo",
+      "es": "Igbo"
+     }
+    },
+    {
+     "value": "ii",
+     "labels": {
+      "en": "Sichuan Yi",
+      "es": "Sichuan Yi"
+     }
+    },
+    {
+     "value": "ik",
+     "labels": {
+      "en": "Inupiaq",
+      "es": "Inupiak"
+     }
+    },
+    {
+     "value": "io",
+     "labels": {
+      "en": "Ido",
+      "es": "Ido"
+     }
+    },
+    {
+     "value": "is",
+     "labels": {
+      "en": "Icelandic",
+      "es": "Islandés"
+     }
+    },
+    {
+     "value": "it",
+     "labels": {
+      "en": "Italian",
+      "es": "Italiano"
+     }
+    },
+    {
+     "value": "iu",
+     "labels": {
+      "en": "Inuktitut",
+      "es": "Inuktitut"
+     }
+    },
+    {
+     "value": "ja",
+     "labels": {
+      "en": "Japanese",
+      "es": "Japonés"
+     }
+    },
+    {
+     "value": "jv",
+     "labels": {
+      "en": "Javanese",
+      "es": "Javanés"
+     }
+    },
+    {
+     "value": "ka",
+     "labels": {
+      "en": "Georgian",
+      "es": "Georgiano"
+     }
+    },
+    {
+     "value": "kg",
+     "labels": {
+      "en": "Kongo",
+      "es": "Kongo"
+     }
+    },
+    {
+     "value": "ki",
+     "labels": {
+      "en": "Kikuyu",
+      "es": "Kikuyu"
+     }
+    },
+    {
+     "value": "kj",
+     "labels": {
+      "en": "Kuanyama",
+      "es": "Kuanyama"
+     }
+    },
+    {
+     "value": "kk",
+     "labels": {
+      "en": "Kazakh",
+      "es": "Kazako"
+     }
+    },
+    {
+     "value": "kl",
+     "labels": {
+      "en": "Kalaallisut",
+      "es": "Kalaallisut"
+     }
+    },
+    {
+     "value": "km",
+     "labels": {
+      "en": "Khmer",
+      "es": "Khmer"
+     }
+    },
+    {
+     "value": "kn",
+     "labels": {
+      "en": "Kannada",
+      "es": "Canarés"
+     }
+    },
+    {
+     "value": "ko",
+     "labels": {
+      "en": "Korean",
+      "es": "Coreano"
+     }
+    },
+    {
+     "value": "kr",
+     "labels": {
+      "en": "Kanuri",
+      "es": "Kanuri"
+     }
+    },
+    {
+     "value": "ks",
+     "labels": {
+      "en": "Kashmiri",
+      "es": "Kashmir"
+     }
+    },
+    {
+     "value": "ku",
+     "labels": {
+      "en": "Kurdish",
+      "es": "Kurdo"
+     }
+    },
+    {
+     "value": "kv",
+     "labels": {
+      "en": "Komi",
+      "es": "Komi"
+     }
+    },
+    {
+     "value": "kw",
+     "labels": {
+      "en": "Cornish",
+      "es": "Córnico"
+     }
+    },
+    {
+     "value": "ky",
+     "labels": {
+      "en": "Kirghiz",
+      "es": "Kirghizo"
+     }
+    },
+    {
+     "value": "la",
+     "labels": {
+      "en": "Latin",
+      "es": "Latín"
+     }
+    },
+    {
+     "value": "lb",
+     "labels": {
+      "en": "Luxembourgish",
+      "es": "Luxembourgish"
+     }
+    },
+    {
+     "value": "lg",
+     "labels": {
+      "en": "Ganda",
+      "es": "Ganda"
+     }
+    },
+    {
+     "value": "li",
+     "labels": {
+      "en": "Limburgan",
+      "es": "Limburgan"
+     }
+    },
+    {
+     "value": "ln",
+     "labels": {
+      "en": "Lingala",
+      "es": "Lingala"
+     }
+    },
+    {
+     "value": "lo",
+     "labels": {
+      "en": "Lao",
+      "es": "laosiano"
+     }
+    },
+    {
+     "value": "lt",
+     "labels": {
+      "en": "Lithuanian",
+      "es": "Lituano"
+     }
+    },
+    {
+     "value": "lu",
+     "labels": {
+      "en": "Luba-Katanga",
+      "es": "Luba-Katanga"
+     }
+    },
+    {
+     "value": "lv",
+     "labels": {
+      "en": "Latvian",
+      "es": "Letón"
+     }
+    },
+    {
+     "value": "mg",
+     "labels": {
+      "en": "Malagasy",
+      "es": "Malgache"
+     }
+    },
+    {
+     "value": "mh",
+     "labels": {
+      "en": "Marshallese",
+      "es": "Marshallese"
+     }
+    },
+    {
+     "value": "mi",
+     "labels": {
+      "en": "Maori",
+      "es": "Maorí"
+     }
+    },
+    {
+     "value": "mk",
+     "labels": {
+      "en": "Macedonian",
+      "es": "Macedonio"
+     }
+    },
+    {
+     "value": "ml",
+     "labels": {
+      "en": "Malayalam",
+      "es": "malabar"
+     }
+    },
+    {
+     "value": "mn",
+     "labels": {
+      "en": "Mongolian",
+      "es": "Mongol"
+     }
+    },
+    {
+     "value": "mr",
+     "labels": {
+      "en": "Marathi",
+      "es": "Marath"
+     }
+    },
+    {
+     "value": "ms",
+     "labels": {
+      "en": "Malay (macrolanguage)",
+      "es": "Malay (macrolanguage)"
+     }
+    },
+    {
+     "value": "mt",
+     "labels": {
+      "en": "Maltese",
+      "es": "Maltés"
+     }
+    },
+    {
+     "value": "my",
+     "labels": {
+      "en": "Burmese",
+      "es": "Birmano"
+     }
+    },
+    {
+     "value": "na",
+     "labels": {
+      "en": "Nauru",
+      "es": "Nauru"
+     }
+    },
+    {
+     "value": "nb",
+     "labels": {
+      "en": "Norwegian Bokmål",
+      "es": "Norwegian Bokmål"
+     }
+    },
+    {
+     "value": "nd",
+     "labels": {
+      "en": "North Ndebele",
+      "es": "North Ndebele"
+     }
+    },
+    {
+     "value": "ne",
+     "labels": {
+      "en": "Nepali (macrolanguage)",
+      "es": "Nepali (macrolanguage)"
+     }
+    },
+    {
+     "value": "ng",
+     "labels": {
+      "en": "Ndonga",
+      "es": "Ndonga"
+     }
+    },
+    {
+     "value": "nl",
+     "labels": {
+      "en": "Dutch",
+      "es": "Neerlandés (Holandés)"
+     }
+    },
+    {
+     "value": "nn",
+     "labels": {
+      "en": "Norwegian Nynorsk",
+      "es": "Noruego Nynorsk"
+     }
+    },
+    {
+     "value": "no",
+     "labels": {
+      "en": "Norwegian",
+      "es": "Noruego"
+     }
+    },
+    {
+     "value": "nr",
+     "labels": {
+      "en": "South Ndebele",
+      "es": "South Ndebele"
+     }
+    },
+    {
+     "value": "nv",
+     "labels": {
+      "en": "Navajo",
+      "es": "Navajo"
+     }
+    },
+    {
+     "value": "ny",
+     "labels": {
+      "en": "Chichewa",
+      "es": "Chichewa"
+     }
+    },
+    {
+     "value": "oc",
+     "labels": {
+      "en": "Occitan (post 1500)",
+      "es": "Occitan (post 1500)"
+     }
+    },
+    {
+     "value": "oj",
+     "labels": {
+      "en": "Ojibwa",
+      "es": "Ojibwa"
+     }
+    },
+    {
+     "value": "om",
+     "labels": {
+      "en": "Oromo",
+      "es": "Oromo (Afan)"
+     }
+    },
+    {
+     "value": "or",
+     "labels": {
+      "en": "Oriya (macrolanguage)",
+      "es": "Oriya (macrolanguage)"
+     }
+    },
+    {
+     "value": "os",
+     "labels": {
+      "en": "Ossetian",
+      "es": "Ossetian"
+     }
+    },
+    {
+     "value": "pa",
+     "labels": {
+      "en": "Panjabi",
+      "es": "Panjabi"
+     }
+    },
+    {
+     "value": "pi",
+     "labels": {
+      "en": "Pali",
+      "es": "Pali"
+     }
+    },
+    {
+     "value": "pl",
+     "labels": {
+      "en": "Polish",
+      "es": "Polaco"
+     }
+    },
+    {
+     "value": "ps",
+     "labels": {
+      "en": "Pushto",
+      "es": "Pashtún"
+     }
+    },
+    {
+     "value": "pt",
+     "labels": {
+      "en": "Portuguese",
+      "es": "Portugués"
+     }
+    },
+    {
+     "value": "qu",
+     "labels": {
+      "en": "Quechua",
+      "es": "Quechua"
+     }
+    },
+    {
+     "value": "rm",
+     "labels": {
+      "en": "Romansh",
+      "es": "Romansh"
+     }
+    },
+    {
+     "value": "rn",
+     "labels": {
+      "en": "Rundi",
+      "es": "Kiroundi"
+     }
+    },
+    {
+     "value": "ro",
+     "labels": {
+      "en": "Romanian",
+      "es": "Rumano"
+     }
+    },
+    {
+     "value": "ru",
+     "labels": {
+      "en": "Russian",
+      "es": "Ruso"
+     }
+    },
+    {
+     "value": "rw",
+     "labels": {
+      "en": "Kinyarwanda",
+      "es": "Kinyarwanda"
+     }
+    },
+    {
+     "value": "sa",
+     "labels": {
+      "en": "Sanskrit",
+      "es": "Sánscrito"
+     }
+    },
+    {
+     "value": "sc",
+     "labels": {
+      "en": "Sardinian",
+      "es": "Sardo"
+     }
+    },
+    {
+     "value": "sd",
+     "labels": {
+      "en": "Sindhi",
+      "es": "Sindhi"
+     }
+    },
+    {
+     "value": "se",
+     "labels": {
+      "en": "Northern Sami",
+      "es": "Northern Sami"
+     }
+    },
+    {
+     "value": "sg",
+     "labels": {
+      "en": "Sango",
+      "es": "Sango"
+     }
+    },
+    {
+     "value": "sh",
+     "labels": {
+      "en": "Serbo-Croatian",
+      "es": "Serbo-Croatian"
+     }
+    },
+    {
+     "value": "si",
+     "labels": {
+      "en": "Sinhala",
+      "es": "Cingalés"
+     }
+    },
+    {
+     "value": "sk",
+     "labels": {
+      "en": "Slovak",
+      "es": "Eslovaco"
+     }
+    },
+    {
+     "value": "sl",
+     "labels": {
+      "en": "Slovenian",
+      "es": "Esloveno"
+     }
+    },
+    {
+     "value": "sm",
+     "labels": {
+      "en": "Samoan",
+      "es": "Samoano"
+     }
+    },
+    {
+     "value": "sn",
+     "labels": {
+      "en": "Shona",
+      "es": "Shona"
+     }
+    },
+    {
+     "value": "so",
+     "labels": {
+      "en": "Somali",
+      "es": "Somalí"
+     }
+    },
+    {
+     "value": "sq",
+     "labels": {
+      "en": "Albanian",
+      "es": "Albanés"
+     }
+    },
+    {
+     "value": "sr",
+     "labels": {
+      "en": "Serbian",
+      "es": "Serbio"
+     }
+    },
+    {
+     "value": "ss",
+     "labels": {
+      "en": "Swati",
+      "es": "Siswati"
+     }
+    },
+    {
+     "value": "st",
+     "labels": {
+      "en": "Southern Sotho",
+      "es": "Southern Sotho"
+     }
+    },
+    {
+     "value": "su",
+     "labels": {
+      "en": "Sundanese",
+      "es": "Sondanés"
+     }
+    },
+    {
+     "value": "sv",
+     "labels": {
+      "en": "Swedish",
+      "es": "Sueco"
+     }
+    },
+    {
+     "value": "sw",
+     "labels": {
+      "en": "Swahili (macrolanguage)",
+      "es": "Swahili (macrolanguage)"
+     }
+    },
+    {
+     "value": "ta",
+     "labels": {
+      "en": "Tamil",
+      "es": "Tamil"
+     }
+    },
+    {
+     "value": "te",
+     "labels": {
+      "en": "Telugu",
+      "es": "Telugu"
+     }
+    },
+    {
+     "value": "tg",
+     "labels": {
+      "en": "Tajik",
+      "es": "Tajiko"
+     }
+    },
+    {
+     "value": "th",
+     "labels": {
+      "en": "Thai",
+      "es": "Tailandés"
+     }
+    },
+    {
+     "value": "ti",
+     "labels": {
+      "en": "Tigrinya",
+      "es": "Tigrinya"
+     }
+    },
+    {
+     "value": "tk",
+     "labels": {
+      "en": "Turkmen",
+      "es": "Turkmeno"
+     }
+    },
+    {
+     "value": "tl",
+     "labels": {
+      "en": "Tagalog",
+      "es": "Tagalo"
+     }
+    },
+    {
+     "value": "tn",
+     "labels": {
+      "en": "Tswana",
+      "es": "Setchwana"
+     }
+    },
+    {
+     "value": "to",
+     "labels": {
+      "en": "Tonga (Tonga Islands)",
+      "es": "Tonga (Islas Tonga)"
+     }
+    },
+    {
+     "value": "tr",
+     "labels": {
+      "en": "Turkish",
+      "es": "Turco"
+     }
+    },
+    {
+     "value": "ts",
+     "labels": {
+      "en": "Tsonga",
+      "es": "Tsonga"
+     }
+    },
+    {
+     "value": "tt",
+     "labels": {
+      "en": "Tatar",
+      "es": "Tataro"
+     }
+    },
+    {
+     "value": "tw",
+     "labels": {
+      "en": "Twi",
+      "es": "Tchi"
+     }
+    },
+    {
+     "value": "ty",
+     "labels": {
+      "en": "Tahitian",
+      "es": "Tahitiano"
+     }
+    },
+    {
+     "value": "ug",
+     "labels": {
+      "en": "Uighur",
+      "es": "Uiguro"
+     }
+    },
+    {
+     "value": "uk",
+     "labels": {
+      "en": "Ukrainian",
+      "es": "Ukranio"
+     }
+    },
+    {
+     "value": "ur",
+     "labels": {
+      "en": "Urdu",
+      "es": "Urdu"
+     }
+    },
+    {
+     "value": "uz",
+     "labels": {
+      "en": "Uzbek",
+      "es": "Uzbeko"
+     }
+    },
+    {
+     "value": "ve",
+     "labels": {
+      "en": "Venda",
+      "es": "Venda"
+     }
+    },
+    {
+     "value": "vi",
+     "labels": {
+      "en": "Vietnamese",
+      "es": "Vietnamita"
+     }
+    },
+    {
+     "value": "vo",
+     "labels": {
+      "en": "Volapük",
+      "es": "Volapük"
+     }
+    },
+    {
+     "value": "wa",
+     "labels": {
+      "en": "Walloon",
+      "es": "valón"
+     }
+    },
+    {
+     "value": "wo",
+     "labels": {
+      "en": "Wolof",
+      "es": "Wolof"
+     }
+    },
+    {
+     "value": "xh",
+     "labels": {
+      "en": "Xhosa",
+      "es": "Xhosa"
+     }
+    },
+    {
+     "value": "yi",
+     "labels": {
+      "en": "Yiddish",
+      "es": "Yidish"
+     }
+    },
+    {
+     "value": "yo",
+     "labels": {
+      "en": "Yoruba",
+      "es": "Yoruba"
+     }
+    },
+    {
+     "value": "za",
+     "labels": {
+      "en": "Zhuang",
+      "es": "Zhuang"
+     }
+    },
+    {
+     "value": "zh",
+     "labels": {
+      "en": "Chinese",
+      "es": "Chino"
+     }
+    },
+    {
+     "value": "zu",
+     "labels": {
+      "en": "Zulu",
+      "es": "Zulu"
+     }
+    }
+   ]
+  },
+  {
+   "key": "sex",
+   "labels": {
+    "en": "Sex",
+    "es": "Sexo"
+   },
+   "source": "ISO/IEC 5218",
+   "codes": [
+    {
+     "value": 0,
+     "labels": {
+      "en": "Not known",
+      "es": "Desconocido"
+     }
+    },
+    {
+     "value": 1,
+     "labels": {
+      "en": "Male",
+      "es": "Hombre"
+     }
+    },
+    {
+     "value": 2,
+     "labels": {
+      "en": "Female",
+      "es": "Mujer"
+     }
+    },
+    {
+     "value": 9,
+     "labels": {
+      "en": "Not applicable",
+      "es": "No aplicable"
+     }
+    }
+   ]
+  },
+  {
+   "key": "identity_document_type",
+   "labels": {
+    "en": "Identity documents",
+    "es": "Documentos de identidad"
+   },
+   "source": "Almena",
+   "codes": [
+    {
+     "value": "id_card",
+     "labels": {
+      "en": "National identity card",
+      "es": "Documento nacional de identidad"
+     }
+    },
+    {
+     "value": "passport",
+     "labels": {
+      "en": "Passport",
+      "es": "Pasaporte"
+     }
+    },
+    {
+     "value": "residence_permit",
+     "labels": {
+      "en": "Residence permit",
+      "es": "Permiso de residencia"
+     }
+    },
+    {
+     "value": "driving_licence",
+     "labels": {
+      "en": "Driving licence",
+      "es": "Permiso de conducir"
+     }
+    }
+   ]
+  },
+  {
+   "key": "education_level",
+   "labels": {
+    "en": "Education levels",
+    "es": "Niveles educativos"
+   },
+   "source": "UNESCO ISCED 2011",
+   "codes": [
+    {
+     "value": 0,
+     "labels": {
+      "en": "Early childhood education",
+      "es": "Educación de la primera infancia"
+     }
+    },
+    {
+     "value": 1,
+     "labels": {
+      "en": "Primary education",
+      "es": "Educación primaria"
+     }
+    },
+    {
+     "value": 2,
+     "labels": {
+      "en": "Lower secondary education",
+      "es": "Primera etapa de educación secundaria"
+     }
+    },
+    {
+     "value": 3,
+     "labels": {
+      "en": "Upper secondary education",
+      "es": "Segunda etapa de educación secundaria"
+     }
+    },
+    {
+     "value": 4,
+     "labels": {
+      "en": "Post-secondary non-tertiary education",
+      "es": "Educación postsecundaria no terciaria"
+     }
+    },
+    {
+     "value": 5,
+     "labels": {
+      "en": "Short-cycle tertiary education",
+      "es": "Educación terciaria de ciclo corto"
+     }
+    },
+    {
+     "value": 6,
+     "labels": {
+      "en": "Bachelor's or equivalent",
+      "es": "Grado o equivalente"
+     }
+    },
+    {
+     "value": 7,
+     "labels": {
+      "en": "Master's or equivalent",
+      "es": "Máster o equivalente"
+     }
+    },
+    {
+     "value": 8,
+     "labels": {
+      "en": "Doctoral or equivalent",
+      "es": "Doctorado o equivalente"
+     }
+    }
+   ]
+  },
+  {
+   "key": "file_format",
+   "labels": {
+    "en": "File formats",
+    "es": "Formatos de fichero"
+   },
+   "source": "IANA media types",
+   "codes": [
+    {
+     "value": "pdf",
+     "labels": {
+      "en": "PDF",
+      "es": "PDF"
+     },
+     "media_type": "application/pdf"
+    },
+    {
+     "value": "jpeg",
+     "labels": {
+      "en": "JPEG image",
+      "es": "Imagen JPEG"
+     },
+     "media_type": "image/jpeg"
+    },
+    {
+     "value": "png",
+     "labels": {
+      "en": "PNG image",
+      "es": "Imagen PNG"
+     },
+     "media_type": "image/png"
+    },
+    {
+     "value": "webp",
+     "labels": {
+      "en": "WebP image",
+      "es": "Imagen WebP"
+     },
+     "media_type": "image/webp"
+    },
+    {
+     "value": "heic",
+     "labels": {
+      "en": "HEIC image",
+      "es": "Imagen HEIC"
+     },
+     "media_type": "image/heic"
+    },
+    {
+     "value": "docx",
+     "labels": {
+      "en": "Word (.docx)",
+      "es": "Word (.docx)"
+     },
+     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    },
+    {
+     "value": "xlsx",
+     "labels": {
+      "en": "Excel (.xlsx)",
+      "es": "Excel (.xlsx)"
+     },
+     "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    },
+    {
+     "value": "odt",
+     "labels": {
+      "en": "OpenDocument text",
+      "es": "Texto OpenDocument"
+     },
+     "media_type": "application/vnd.oasis.opendocument.text"
+    },
+    {
+     "value": "ods",
+     "labels": {
+      "en": "OpenDocument sheet",
+      "es": "Hoja OpenDocument"
+     },
+     "media_type": "application/vnd.oasis.opendocument.spreadsheet"
+    },
+    {
+     "value": "txt",
+     "labels": {
+      "en": "Plain text",
+      "es": "Texto plano"
+     },
+     "media_type": "text/plain"
+    },
+    {
+     "value": "csv",
+     "labels": {
+      "en": "CSV",
+      "es": "CSV"
+     },
+     "media_type": "text/csv"
+    },
+    {
+     "value": "xml",
+     "labels": {
+      "en": "XML",
+      "es": "XML"
+     },
+     "media_type": "application/xml"
+    },
+    {
+     "value": "zip",
+     "labels": {
+      "en": "ZIP archive",
+      "es": "Archivo ZIP"
+     },
+     "media_type": "application/zip"
+    }
+   ]
+  }
+ ],
+ "fields": [
+  {
+   "key": "given_name",
+   "type": "text",
+   "labels": {
+    "en": "Given name",
+    "es": "Nombre"
+   },
+   "source": "OIDC Standard Claims, EU PID rule book (SD-JWT VC)",
+   "category": "person",
+   "definition": {
+    "max_length": 100
+   }
+  },
+  {
+   "key": "family_name",
+   "type": "text",
+   "labels": {
+    "en": "Family name",
+    "es": "Apellidos"
+   },
+   "source": "OIDC Standard Claims, EU PID rule book (SD-JWT VC)",
+   "category": "person",
+   "definition": {
+    "max_length": 100
+   }
+  },
+  {
+   "key": "birthdate",
+   "type": "date",
+   "labels": {
+    "en": "Date of birth",
+    "es": "Fecha de nacimiento"
+   },
+   "source": "OIDC Standard Claims, EU PID rule book (SD-JWT VC)",
+   "category": "person",
+   "definition": {}
+  },
+  {
+   "key": "place_of_birth",
+   "type": "group",
+   "labels": {
+    "en": "Place of birth",
+    "es": "Lugar de nacimiento"
+   },
+   "source": "EU PID rule book (SD-JWT VC)",
+   "category": "person",
+   "definition": {
+    "parts": [
+     {
+      "key": "locality",
+      "required": true,
+      "field": {
+       "type": "text",
+       "labels": {
+        "en": "Locality",
+        "es": "Localidad"
+       },
+       "source": "EU PID rule book (SD-JWT VC)",
+       "definition": {
+        "max_length": 100
+       }
+      }
+     },
+     {
+      "key": "region",
+      "required": false,
+      "field": {
+       "type": "text",
+       "labels": {
+        "en": "Region",
+        "es": "Provincia o región"
+       },
+       "source": "EU PID rule book (SD-JWT VC)",
+       "definition": {
+        "max_length": 100
+       }
+      }
+     },
+     {
+      "key": "country",
+      "required": true,
+      "field": {
+       "type": "code",
+       "labels": {
+        "en": "Country",
+        "es": "País"
+       },
+       "source": "EU PID rule book (SD-JWT VC)",
+       "definition": {
+        "domain": "country"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "key": "nationalities",
+   "type": "codes",
+   "labels": {
+    "en": "Nationalities",
+    "es": "Nacionalidades"
+   },
+   "source": "EU PID rule book (SD-JWT VC)",
+   "category": "person",
+   "definition": {
+    "domain": "country"
+   }
+  },
+  {
+   "key": "sex",
+   "type": "code",
+   "labels": {
+    "en": "Sex",
+    "es": "Sexo"
+   },
+   "source": "EU PID rule book (SD-JWT VC)",
+   "category": "person",
+   "definition": {
+    "domain": "sex"
+   }
+  },
+  {
+   "key": "personal_administrative_number",
+   "type": "text",
+   "labels": {
+    "en": "Personal administrative number",
+    "es": "Número de identificación personal"
+   },
+   "source": "EU PID rule book (SD-JWT VC)",
+   "category": "person",
+   "definition": {
+    "max_length": 50
+   }
+  },
+  {
+   "key": "tax_id",
+   "type": "text",
+   "labels": {
+    "en": "Tax identification number",
+    "es": "Número de identificación fiscal"
+   },
+   "source": "schema.org taxID",
+   "category": "person",
+   "definition": {
+    "max_length": 50
+   }
+  },
+  {
+   "key": "preferred_language",
+   "type": "code",
+   "labels": {
+    "en": "Preferred language",
+    "es": "Idioma preferido"
+   },
+   "source": "ISO 639-1",
+   "category": "person",
+   "definition": {
+    "domain": "language"
+   }
+  },
+  {
+   "key": "email",
+   "type": "email",
+   "labels": {
+    "en": "Email",
+    "es": "Email"
+   },
+   "source": "OIDC Standard Claims, EU PID rule book (SD-JWT VC)",
+   "category": "contact",
+   "definition": {}
+  },
+  {
+   "key": "phone_number",
+   "type": "phone",
+   "labels": {
+    "en": "Phone number",
+    "es": "Teléfono"
+   },
+   "source": "OIDC Standard Claims, EU PID rule book (SD-JWT VC)",
+   "category": "contact",
+   "definition": {
+    "pattern": "^\\+[1-9][0-9]{6,14}$"
+   }
+  },
+  {
+   "key": "address",
+   "type": "group",
+   "labels": {
+    "en": "Address",
+    "es": "Dirección"
+   },
+   "source": "OIDC Standard Claims, EU PID rule book (SD-JWT VC)",
+   "category": "contact",
+   "definition": {
+    "parts": [
+     {
+      "key": "street_address",
+      "required": true,
+      "field": {
+       "type": "text",
+       "labels": {
+        "en": "Street",
+        "es": "Calle"
+       },
+       "source": "OIDC Standard Claims",
+       "definition": {
+        "max_length": 200
+       }
+      }
+     },
+     {
+      "key": "house_number",
+      "required": false,
+      "field": {
+       "type": "text",
+       "labels": {
+        "en": "Number",
+        "es": "Número"
+       },
+       "source": "EU PID rule book (SD-JWT VC)",
+       "definition": {
+        "max_length": 20
+       }
+      }
+     },
+     {
+      "key": "postal_code",
+      "required": true,
+      "field": {
+       "type": "text",
+       "labels": {
+        "en": "Postal code",
+        "es": "Código postal"
+       },
+       "source": "OIDC Standard Claims",
+       "definition": {
+        "max_length": 20
+       }
+      }
+     },
+     {
+      "key": "locality",
+      "required": true,
+      "field": {
+       "type": "text",
+       "labels": {
+        "en": "Locality",
+        "es": "Localidad"
+       },
+       "source": "OIDC Standard Claims",
+       "definition": {
+        "max_length": 100
+       }
+      }
+     },
+     {
+      "key": "region",
+      "required": false,
+      "field": {
+       "type": "text",
+       "labels": {
+        "en": "Region",
+        "es": "Provincia o región"
+       },
+       "source": "OIDC Standard Claims",
+       "definition": {
+        "max_length": 100
+       }
+      }
+     },
+     {
+      "key": "country",
+      "required": true,
+      "field": {
+       "type": "code",
+       "labels": {
+        "en": "Country",
+        "es": "País"
+       },
+       "source": "OIDC Standard Claims",
+       "definition": {
+        "domain": "country"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "key": "identity_document",
+   "type": "group",
+   "labels": {
+    "en": "Identity document",
+    "es": "Documento de identidad"
+   },
+   "source": "ISO/IEC 18013-5, ISO/IEC 23220-2",
+   "category": "document",
+   "definition": {
+    "parts": [
+     {
+      "key": "document_type",
+      "required": true,
+      "field": {
+       "type": "code",
+       "labels": {
+        "en": "Document type",
+        "es": "Tipo de documento"
+       },
+       "source": "Almena",
+       "definition": {
+        "domain": "identity_document_type"
+       }
+      }
+     },
+     {
+      "key": "document_number",
+      "required": true,
+      "field": {
+       "type": "text",
+       "labels": {
+        "en": "Document number",
+        "es": "Número de documento"
+       },
+       "source": "ISO/IEC 18013-5, ISO/IEC 23220-2",
+       "definition": {
+        "max_length": 50
+       }
+      }
+     },
+     {
+      "key": "issuing_country",
+      "required": true,
+      "field": {
+       "type": "code",
+       "labels": {
+        "en": "Issuing country",
+        "es": "País de expedición"
+       },
+       "source": "ISO/IEC 18013-5, ISO/IEC 23220-2",
+       "definition": {
+        "domain": "country"
+       }
+      }
+     },
+     {
+      "key": "expiry_date",
+      "required": true,
+      "field": {
+       "type": "date",
+       "labels": {
+        "en": "Expiry date",
+        "es": "Fecha de caducidad"
+       },
+       "source": "ISO/IEC 18013-5, ISO/IEC 23220-2",
+       "definition": {}
+      }
+     }
+    ]
+   }
+  },
+  {
+   "key": "portrait",
+   "type": "file",
+   "labels": {
+    "en": "Portrait photo",
+    "es": "Fotografía"
+   },
+   "source": "ISO/IEC 18013-5, ISO/IEC 23220-2",
+   "category": "document",
+   "definition": {
+    "domain": "file_format",
+    "values": [
+     "jpeg",
+     "png"
+    ]
+   }
+  },
+  {
+   "key": "education_level",
+   "type": "code",
+   "labels": {
+    "en": "Education level",
+    "es": "Nivel educativo"
+   },
+   "source": "UNESCO ISCED 2011",
+   "category": "education",
+   "definition": {
+    "domain": "education_level"
+   }
+  },
+  {
+   "key": "organization_name",
+   "type": "text",
+   "labels": {
+    "en": "Organization",
+    "es": "Organización"
+   },
+   "source": "schema.org worksFor",
+   "category": "education",
+   "definition": {
+    "max_length": 200
+   }
+  },
+  {
+   "key": "job_title",
+   "type": "text",
+   "labels": {
+    "en": "Job title",
+    "es": "Puesto"
+   },
+   "source": "schema.org jobTitle",
+   "category": "education",
+   "definition": {
+    "max_length": 100
+   }
+  },
+  {
+   "key": "employee_number",
+   "type": "text",
+   "labels": {
+    "en": "Employee number",
+    "es": "Número de empleado"
+   },
+   "source": "schema.org identifier",
+   "category": "education",
+   "definition": {
+    "max_length": 50
+   }
+  },
+  {
+   "key": "start_date",
+   "type": "date",
+   "labels": {
+    "en": "Start date",
+    "es": "Fecha de inicio"
+   },
+   "source": "schema.org startDate",
+   "category": "education",
+   "definition": {}
+  },
+  {
+   "key": "program_name",
+   "type": "text",
+   "labels": {
+    "en": "Programme",
+    "es": "Estudios"
+   },
+   "source": "EU Learning Model (ELM)",
+   "category": "education",
+   "definition": {
+    "max_length": 200
+   }
+  },
+  {
+   "key": "academic_year",
+   "type": "text",
+   "labels": {
+    "en": "Academic year",
+    "es": "Curso académico"
+   },
+   "source": "Almena (YYYY-YYYY)",
+   "category": "education",
+   "definition": {
+    "max_length": 9,
+    "pattern": "^[0-9]{4}-[0-9]{4}$"
+   }
+  },
+  {
+   "key": "degree_name",
+   "type": "text",
+   "labels": {
+    "en": "Qualification",
+    "es": "Titulación"
+   },
+   "source": "EU Learning Model (ELM)",
+   "category": "education",
+   "definition": {
+    "max_length": 200
+   }
+  },
+  {
+   "key": "field_of_study",
+   "type": "text",
+   "labels": {
+    "en": "Field of study",
+    "es": "Área de estudio"
+   },
+   "source": "EU Learning Model (ELM)",
+   "category": "education",
+   "definition": {
+    "max_length": 200
+   }
+  },
+  {
+   "key": "awarding_date",
+   "type": "date",
+   "labels": {
+    "en": "Date awarded",
+    "es": "Fecha de expedición"
+   },
+   "source": "EU Learning Model (ELM)",
+   "category": "education",
+   "definition": {}
+  },
+  {
+   "key": "member_number",
+   "type": "text",
+   "labels": {
+    "en": "Member number",
+    "es": "Número de socio"
+   },
+   "source": "schema.org membershipNumber",
+   "category": "membership",
+   "definition": {
+    "max_length": 50
+   }
+  },
+  {
+   "key": "document_file",
+   "type": "file",
+   "labels": {
+    "en": "Document",
+    "es": "Documento"
+   },
+   "source": "IANA media types",
+   "category": "file",
+   "definition": {
+    "domain": "file_format",
+    "repeatable": true
+   }
+  }
+ ],
+ "credential_types": [
+  {
+   "key": "pid",
+   "labels": {
+    "en": "Person identification data (EU PID)",
+    "es": "Datos de identificación (PID UE)"
+   },
+   "descriptions": {
+    "en": "The EU Digital Identity Wallet's identity credential, issued by member states.",
+    "es": "La credencial de identidad de la Cartera Europea de Identidad Digital, expedida por los Estados miembros."
+   },
+   "category": "identity",
+   "source": "EU PID rule book (ARF)",
+   "claims": [
+    {
+     "field": "given_name",
+     "required": true
+    },
+    {
+     "field": "family_name",
+     "required": true
+    },
+    {
+     "field": "birthdate",
+     "required": true
+    },
+    {
+     "field": "place_of_birth",
+     "required": false
+    },
+    {
+     "field": "nationalities",
+     "required": true
+    },
+    {
+     "field": "sex",
+     "required": false
+    },
+    {
+     "field": "address",
+     "required": false
+    },
+    {
+     "field": "personal_administrative_number",
+     "required": false
+    },
+    {
+     "field": "email",
+     "required": false
+    },
+    {
+     "field": "phone_number",
+     "required": false
+    }
+   ],
+   "issuance": "external",
+   "vct": "urn:eudi:pid:1",
+   "mdoc_doctype": "eu.europa.ec.eudi.pid.1"
+  },
+  {
+   "key": "residence",
+   "labels": {
+    "en": "Proof of residence",
+    "es": "Certificado de residencia"
+   },
+   "descriptions": {
+    "en": "Where a person lives, as the issuer has checked it.",
+    "es": "Dónde reside una persona, tal como lo ha comprobado el emisor."
+   },
+   "category": "identity",
+   "source": "Almena",
+   "claims": [
+    {
+     "field": "given_name",
+     "required": true
+    },
+    {
+     "field": "family_name",
+     "required": true
+    },
+    {
+     "field": "address",
+     "required": true
+    },
+    {
+     "field": "personal_administrative_number",
+     "required": false
+    }
+   ],
+   "issuance": "almena",
+   "w3c_type": "ResidenceCredential"
+  },
+  {
+   "key": "verified_email",
+   "labels": {
+    "en": "Verified email",
+    "es": "Email verificado"
+   },
+   "descriptions": {
+    "en": "An email address its holder has proved to control.",
+    "es": "Una dirección de email que su titular ha demostrado controlar."
+   },
+   "category": "contact",
+   "source": "Almena",
+   "claims": [
+    {
+     "field": "email",
+     "required": true
+    }
+   ],
+   "issuance": "almena",
+   "w3c_type": "VerifiedEmailCredential"
+  },
+  {
+   "key": "verified_phone",
+   "labels": {
+    "en": "Verified phone number",
+    "es": "Teléfono verificado"
+   },
+   "descriptions": {
+    "en": "A phone number its holder has proved to control.",
+    "es": "Un número de teléfono que su titular ha demostrado controlar."
+   },
+   "category": "contact",
+   "source": "Almena",
+   "claims": [
+    {
+     "field": "phone_number",
+     "required": true
+    }
+   ],
+   "issuance": "almena",
+   "w3c_type": "VerifiedPhoneCredential"
+  },
+  {
+   "key": "enrollment",
+   "labels": {
+    "en": "Student enrollment",
+    "es": "Matrícula de estudiante"
+   },
+   "descriptions": {
+    "en": "That a person is enrolled in a programme for an academic year.",
+    "es": "Que una persona está matriculada en unos estudios durante un curso."
+   },
+   "category": "education",
+   "source": "EU Learning Model (ELM), simplified",
+   "claims": [
+    {
+     "field": "given_name",
+     "required": true
+    },
+    {
+     "field": "family_name",
+     "required": true
+    },
+    {
+     "field": "organization_name",
+     "required": true
+    },
+    {
+     "field": "program_name",
+     "required": true
+    },
+    {
+     "field": "academic_year",
+     "required": true
+    }
+   ],
+   "issuance": "almena",
+   "w3c_type": "EnrollmentCredential"
+  },
+  {
+   "key": "academic_degree",
+   "labels": {
+    "en": "Academic qualification",
+    "es": "Título académico"
+   },
+   "descriptions": {
+    "en": "A qualification awarded to a person, with its level and awarding body.",
+    "es": "Una titulación otorgada a una persona, con su nivel y quién la otorga."
+   },
+   "category": "education",
+   "source": "EU Learning Model (ELM), simplified; UNESCO ISCED 2011",
+   "claims": [
+    {
+     "field": "given_name",
+     "required": true
+    },
+    {
+     "field": "family_name",
+     "required": true
+    },
+    {
+     "field": "birthdate",
+     "required": false
+    },
+    {
+     "field": "degree_name",
+     "required": true
+    },
+    {
+     "field": "field_of_study",
+     "required": false
+    },
+    {
+     "field": "education_level",
+     "required": true
+    },
+    {
+     "field": "organization_name",
+     "required": true
+    },
+    {
+     "field": "awarding_date",
+     "required": true
+    }
+   ],
+   "issuance": "almena",
+   "w3c_type": "AcademicDegreeCredential"
+  },
+  {
+   "key": "employment",
+   "labels": {
+    "en": "Employment",
+    "es": "Relación laboral"
+   },
+   "descriptions": {
+    "en": "That a person works for an organization, in which role and since when.",
+    "es": "Que una persona trabaja para una organización, en qué puesto y desde cuándo."
+   },
+   "category": "work",
+   "source": "schema.org EmployeeRole, simplified",
+   "claims": [
+    {
+     "field": "given_name",
+     "required": true
+    },
+    {
+     "field": "family_name",
+     "required": true
+    },
+    {
+     "field": "organization_name",
+     "required": true
+    },
+    {
+     "field": "job_title",
+     "required": true
+    },
+    {
+     "field": "employee_number",
+     "required": false
+    },
+    {
+     "field": "start_date",
+     "required": true
+    }
+   ],
+   "issuance": "almena",
+   "w3c_type": "EmploymentCredential"
+  },
+  {
+   "key": "membership",
+   "labels": {
+    "en": "Membership",
+    "es": "Afiliación"
+   },
+   "descriptions": {
+    "en": "That a person is a member of an organization: a club, an association, a professional body.",
+    "es": "Que una persona es miembro de una organización: un club, una asociación, un colegio profesional."
+   },
+   "category": "membership",
+   "source": "schema.org ProgramMembership, simplified",
+   "claims": [
+    {
+     "field": "given_name",
+     "required": true
+    },
+    {
+     "field": "family_name",
+     "required": true
+    },
+    {
+     "field": "organization_name",
+     "required": true
+    },
+    {
+     "field": "member_number",
+     "required": true
+    },
+    {
+     "field": "start_date",
+     "required": false
+    }
+   ],
+   "issuance": "almena",
+   "w3c_type": "MembershipCredential"
+  }
+ ]
+}

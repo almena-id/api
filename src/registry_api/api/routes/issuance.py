@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import answers as checks
-from registry_api import credential_catalog, issuance, presentations, status_lists
+from registry_api import credential_catalog, issuance, presentations, status_lists, trust_anchor
 from registry_api import field_catalog as catalog
 from registry_api.api.routes.applications import _received, content
 from registry_api.api.routes.auth import CurrentSession, DbSession, as_utc
@@ -84,7 +84,8 @@ async def proposal(
     tenant_id: TenantId, application_id: uuid.UUID, session: CurrentSession, db: DbSession
 ) -> dict[str, Any]:
     item, issuer = await _accepted(db, tenant_id, application_id)
-    kind = credential_catalog.BY_ID[item.credential_type]
+    found = await trust_anchor.load(db, tenant_id)
+    kind = found.types[item.credential_type]
     sent = {answer["key"]: answer["value"] for answer in (await content(db, item))["answers"]}
     sent.setdefault("organization_name", issuer.name)
     draft = item.issuance_claims or {}
@@ -98,9 +99,11 @@ async def proposal(
         "credential_type": credential_catalog.type_out(kind),
         "claims": [
             {
-                "field": catalog.field_out(catalog.BY_ID[claim.field]),
+                # Its name in the credential: the field's key.
+                "name": claim.name,
+                "field": catalog.field_out(found.fields[claim.field]),
                 "required": claim.required,
-                "value": draft.get(claim.field, sent.get(claim.field)),
+                "value": draft.get(claim.name, sent.get(claim.name)),
             }
             for claim in kind.claims
         ],
@@ -148,22 +151,23 @@ async def save_draft(
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_the_issuers_signer")
     if body.valid_until <= datetime.now(UTC).date():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="valid_until_invalid")
-    kind = credential_catalog.BY_ID[item.credential_type]
+    found = await trust_anchor.load(db, tenant_id)
+    kind = found.types[item.credential_type]
     kept: dict[str, Any] = {}
     errors: dict[str, str] = {}
     for claim in kind.claims:
-        field = catalog.BY_ID[claim.field]
-        given = body.claims.get(claim.field)
+        field, name = found.fields[claim.field], claim.name
+        given = body.claims.get(name)
         if given is None or given == "" or given == [] or given == {}:
             if claim.required:
-                errors[claim.field] = "required"
+                errors[name] = "required"
             continue
-        value, problem = checks.value_of(field, {}, given, {}, claim.field)
+        value, problem = checks.value_of(field, {}, given, {}, name)
         if problem:
             part, _, code = problem.rpartition(":")
-            errors[f"{claim.field}.{part}" if part else claim.field] = code
+            errors[f"{name}.{part}" if part else name] = code
         else:
-            kept[claim.field] = value
+            kept[name] = value
     if errors:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -210,7 +214,9 @@ async def ask_signature(
     signed = issuance.document(
         issuer=issuer.identity.did,
         key=key,
-        type_id=item.credential_type,
+        vct=credential_catalog.vct(
+            (await trust_anchor.load(db, tenant_id)).types[item.credential_type]
+        ),
         holder=item.holder_did,
         claims=item.issuance_claims,
         valid_until=valid_until,

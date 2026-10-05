@@ -3,7 +3,7 @@ from typing import Any
 from httpx import AsyncClient
 
 from tests.conftest import Outbox
-from tests.test_directory import _sign_in
+from tests.subscriptions import paid_sign_in
 
 CAMPUS: dict[str, Any] = {
     "key": "campus",
@@ -27,7 +27,7 @@ async def _add(
 async def test_a_tenant_adds_its_own_fields_and_forms_use_them(
     client: AsyncClient, outbox: Outbox
 ) -> None:
-    headers, tenant = await _sign_in(client, outbox, "ada@acme.com")
+    headers, tenant = await paid_sign_in(client, outbox, "ada@acme.com")
     base = f"/api/v1/tenants/{tenant}/fields"
     assert (await client.get(base, headers=headers)).json() == []
 
@@ -110,7 +110,7 @@ async def test_a_tenant_adds_its_own_fields_and_forms_use_them(
     assert (await client.delete(f"{base}/{spare['id']}", headers=headers)).status_code == 204
 
     # Another tenant neither sees them nor can use them.
-    eve, other = await _sign_in(client, outbox, "eve@example.org")
+    eve, other = await paid_sign_in(client, outbox, "eve@example.org")
     assert (await client.get(base, headers=eve)).status_code == 404
     theirs = await client.post(
         f"/api/v1/tenants/{other}/forms",
@@ -122,7 +122,7 @@ async def test_a_tenant_adds_its_own_fields_and_forms_use_them(
 
 
 async def test_a_custom_field_must_hold(client: AsyncClient, outbox: Outbox) -> None:
-    headers, tenant = await _sign_in(client, outbox, "ada@acme.com")
+    headers, tenant = await paid_sign_in(client, outbox, "ada@acme.com")
     base = f"/api/v1/tenants/{tenant}/fields"
 
     async def refused(body: dict[str, Any], code: int = 422) -> str:

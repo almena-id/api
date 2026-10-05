@@ -27,8 +27,7 @@ from typing import Annotated, Literal
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import credential_catalog as credentials
-from registry_api import didcomm, messaging_keys
+from registry_api import didcomm, messaging_keys, trust_anchor
 from registry_api.broker import Broker, get_broker
 from registry_api.config import get_settings
 from registry_api.models import Application, Issuer
@@ -71,7 +70,9 @@ async def notify(
         "application": str(item.id),
         "status": status,
         "credential_type": item.credential_type,
-        "credential_name": credentials.BY_ID[item.credential_type].labels,
+        "credential_name": (await trust_anchor.load(db, issuer.tenant_id))
+        .types[item.credential_type]
+        .labels,
         "issuer": issuer.name,
     }
     if item.decision_note and status != "issued":

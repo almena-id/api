@@ -1,9 +1,10 @@
 from typing import Any
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import credential_catalog as credentials
 from registry_api import field_catalog as fields
+from registry_api import trust_anchor
 from tests.conftest import Outbox
 from tests.signing import publish, ready, sign
 from tests.test_directory import _sign_in
@@ -24,7 +25,9 @@ async def test_the_credential_catalogue_is_published(client: AsyncClient) -> Non
     }
     assert membership["schema"] == "https://almena.id/schemas/credentials/v1/membership.json"
     assert membership["metadata"] == ("https://almena.id/.well-known/vct/credentials/membership/v1")
-    assert {"field": "member_number", "required": True} in membership["claims"]
+    assert {"field": "member_number", "name": "member_number", "required": True} in membership[
+        "claims"
+    ]
 
     # The EU PID is asked for, not issued by tenants; its metadata is not ours.
     pid = types["pid"]
@@ -66,19 +69,23 @@ async def test_each_type_publishes_its_schema_and_type_metadata(client: AsyncCli
         assert (await client.get(missing)).status_code == 404
 
 
-def test_every_claim_is_a_catalogue_field_with_every_label() -> None:
-    for item in credentials.TYPES:
-        assert item.category in credentials.CATEGORIES
+async def test_every_claim_is_a_catalogue_field_with_every_label(db: AsyncSession) -> None:
+    found = await trust_anchor.load(db)
+    assert found.types
+    for item in found.types.values():
+        assert item.category in found.type_categories
         assert set(item.labels) == set(item.descriptions) == set(fields.LANGUAGES)
         for claim in item.claims:
-            assert claim.field in fields.BY_ID, (item.id, claim.field)
+            assert claim.field in found.fields, (item.id, claim.field)
 
 
 async def test_an_issuer_declares_what_it_grants(client: AsyncClient, outbox: Outbox) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@acme.com")
     issuers = f"/api/v1/tenants/{tenant}/issuers"
     created = (
-        await client.post(issuers, json={"name": "Club", "description": "Members"}, headers=headers)
+        await client.post(
+            issuers, json={"name": "Club", "description": {"en": "Members"}}, headers=headers
+        )
     ).json()
     url = f"{issuers}/{created['id']}/credential-types"
     assert (await client.get(url, headers=headers)).json() == {"types": [], "forms": {}}

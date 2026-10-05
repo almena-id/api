@@ -8,27 +8,38 @@ Guidance for coding agents working on `api`.
 src/registry_api/
   __main__.py        entry point (`registry-api`): runs uvicorn with the settings;
                      `registry-api init-root --admin <email>` creates the root tenant once
+                     (Almena Trust Anchor, with Almena's catalogue)
   main.py            FastAPI app factory: CORS, routers, lifespan, Scalar docs
   config.py          Settings (pydantic-settings, REGISTRY_* variables)
   db.py              async engine, sessionmaker and the `get_session` dependency
   logs.py            log format (JSON or text), each request's context (request id, user,
                      tenant: `set_user`, `set_tenant`), redaction and the access record
   security.py        sign-in codes and session tokens (both stored as SHA-256)
-  mail.py            SMTP mailer (`get_mailer` dependency) and the email texts, en/es
+  mail.py            SMTP mailer (`get_mailer` dependency) and the email texts, en/es: plain
+                     text plus HTML, framed by `assets/mail.html` + `mail.css` (light, dark
+                     by `prefers-color-scheme`/`[data-ogsc]`), the green mark inline (cid)
   mediators.py       checking the address a mediator listens on (nothing is fetched)
   dns_proof.py       proving a domain with a DNS TXT record (`_almena.{domain}`)
-  root.py            the root tenant (Almena): created once,
-                     its identity is the domain's DID (did:web:almena.id); its public
-                     mediator is every new tenant's default (`default_mediator`)
+  root.py            the root tenant (Almena Trust Anchor): created once, with Almena's
+                     catalogue; its identity is the domain's DID (did:web:almena.id); its
+                     public mediator is every new tenant's default (`default_mediator`)
+  trust_anchor.py    the trust anchor (the root) and its catalogue, everyone's: `load` reads
+                     it from the database (the anchor's fields, domains, categories, credential
+                     types, plus a tenant's own fields as `custom:{key}`), `seed` gives the
+                     anchor `assets/catalogue-v1.json`. Nothing of the catalogue is code
+  entitlements.py    what a tenant's subscription (`models.Subscription`, one per tenant) lets
+                     it do: features, plans (`standard`), `in_force` (active; past_due for
+                     `GRACE`), `allows`/`features` — the one place that decides; routes
+                     refuse with `subscription_required`. The anchor has every feature
   dids.py            identities' did:webvh DIDs (`{did_url}/ids/{slug}`, almena.id): the document
                      each should publish (built in phases: it names only what exists
                      already), its signed log, the next entry to sign, its status
   credentials.py     a tenant's membership credential for its issuers, verifiers, mediators
   signing_flows.py   the signing engine: who signs as a tenant, by its flow (`any_admin`, `single_user`)
-  credential_catalog.py  Almena's credential types: claims named as catalogue fields, how each
-                     format names them (vct, W3C type, mdoc doctype), their claims' JSON
-                     Schema and SD-JWT VC Type Metadata (`/.well-known/vct/…`); `external`
-                     ones (EU PID) are only asked for
+  credential_catalog.py  what a credential type is (the types are the anchor's data): claims
+                     named as catalogue fields, how each format names them (vct, W3C type,
+                     mdoc doctype), their claims' JSON Schema and SD-JWT VC Type Metadata
+                     (`/.well-known/vct/…`); `external` ones (EU PID) are only asked for
   form_credentials.py  a form's `credentials` block: credential types asked to be
                      presented, their claims, whom they are trusted from, the fields they
                      fill, and the OpenID4VP DCQL query they make
@@ -44,10 +55,10 @@ src/registry_api/
   presentations.py   verifying presented credentials (SD-JWT VC, W3C JWT VC/VP): issuer
                      signature by registry DID, the form's trust, type, validity, status
                      lists (`get_status_fetch`, overridden in tests), holder binding, claims
-  field_catalog.py   Almena's field catalogue: the only fields forms ask for (standard
-                     names, JSON Schema, value domains from ISO lists via pycountry,
-                     labels per language); Almena's fields go here; a tenant's own are
-                     `custom_fields`
+  field_catalog.py   what a field is (the fields are data: the anchor's, everyone's, and each
+                     tenant's own): types, groups, value domains, narrowing, the JSON Schema
+                     an answer meets and the catalogue as served. A new field of Almena's is
+                     added by the anchor (`POST …/fields`), never here
   messaging_keys.py  issuers' and verifiers' messaging keys (X25519): made in the vault when
                      their signer first signs them, the public half on `Identity.agreement_key`
                      (their document's `keyAgreement`); deleted with them
@@ -107,7 +118,29 @@ src/registry_api/
                      forms.py: the tenant's forms — the same whoever puts them (an issuer's
                      offer, a verifier's) —, made of catalogue fields, and the JSON Schema of their answers;
                      custom_fields.py: the tenant's own fields, beside Almena's catalogue
-                     (`custom:{key}` in forms, never published);
+                     (`custom:{key}` in forms, never published); the anchor's, Almena's
+                     catalogue (by key, published, with category and source) — groups
+                     too, whose parts it shapes (`PartIn`; in use, only growing);
+                     value_domains.py: the anchor's value domains (`anchor_only`):
+                     added, changed — while a field draws on one, it only grows —
+                     and deleted while none does; coded fields of any tenant may
+                     draw on them (`domain`);
+                     categories.py: the anchor's categories for fields and credential
+                     types (`anchor_only`): added, renamed, deleted while nothing is
+                     filed under them. Everything the anchor keeps only it changes;
+                     what a tenant makes of its own only it sees and uses;
+                     tenants.py: the user's tenants and one's details — name, mediator,
+                     signing flow and the languages it works in (`Tenant.languages`, of
+                     `field_catalog.LANGUAGES`; a new one starts with its creator's, the
+                     anchor has them all: `languages_anchor`) — and its health;
+                     accounts.py: a tenant's subscription (read), and the anchor's admins
+                     listing every other tenant (an account) and setting or removing its
+                     subscription by hand (`anchor_admin` guards them);
+                     credential_types.py: the anchor's credential types (Almena's) and a
+                     tenant's own (`custom:{key}`, its issuers and forms only, published
+                     under its slug; `own_credential_types` entitlement);
+                     fields and types are edited (never their key) and deleted, and
+                     while something uses them a change may only take more;
                      issuer_credentials.py: the credential types an issuer grants, and
                      the form for each (its offers);
                      issuance.py: an accepted application's claims, draft and the

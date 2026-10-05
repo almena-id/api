@@ -31,7 +31,7 @@ async def test_create_then_list(client: AsyncClient, outbox: Outbox, kind: str) 
     empty = (await client.get(base, headers=headers)).json()
     assert empty == {"items": [], "next_cursor": None, "total": 0}
 
-    body = {"name": "  Acme  ", "description": "  "}
+    body = {"name": "  Acme  ", "description": {"en": "  "}}
     created = await client.post(base, json=body, headers=headers)
     assert created.status_code == 201, created.text
     assert created.json()["name"] == "Acme"
@@ -46,9 +46,16 @@ async def test_create_then_list(client: AsyncClient, outbox: Outbox, kind: str) 
 
 async def test_descriptions_are_kept(client: AsyncClient, outbox: Outbox) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
-    body = {"name": "Uni", "description": "Degrees"}
+    body = {"name": "Uni", "description": {"en": "Degrees"}}
     created = await client.post(f"/api/v1/tenants/{tenant}/issuers", json=body, headers=headers)
-    assert created.json()["description"] == "Degrees"
+    assert created.json()["description"] == {"en": "Degrees"}
+    # By language, as forms' are: only the portal's languages.
+    wrong = {"name": "Uni", "description": {"fr": "Diplômes"}}
+    refused = await client.post(f"/api/v1/tenants/{tenant}/issuers", json=wrong, headers=headers)
+    assert refused.status_code == 422
+    as_text = {"name": "Uni", "description": "Degrees"}
+    refused = await client.post(f"/api/v1/tenants/{tenant}/issuers", json=as_text, headers=headers)
+    assert refused.status_code == 422
 
 
 async def test_a_name_is_required(client: AsyncClient, outbox: Outbox) -> None:
@@ -309,11 +316,11 @@ async def test_one_opens_and_changes(
     assert detail["name"] == "Uni" and detail["mediator"] is None
     assert detail["did"] is None and detail["signature"] == "pending"
 
-    patch = {"name": " Uni 2 ", "description": "Degrees", "mediator_id": mediator["id"]}
+    patch = {"name": " Uni 2 ", "description": {"en": "Degrees"}, "mediator_id": mediator["id"]}
     changed = await client.patch(url, json=patch, headers=headers)
     assert changed.status_code == 200, changed.text
     assert changed.json()["name"] == "Uni 2"
-    assert changed.json()["description"] == "Degrees"
+    assert changed.json()["description"] == {"en": "Degrees"}
     assert changed.json()["mediator"] == {"id": mediator["id"], "name": "Relay", "own": True}
     # Its DID stays; its identity follows the name.
     assert changed.json()["did"] == detail["did"]

@@ -1,4 +1,5 @@
-"""The credential types an issuer grants, from Almena's catalogue, and the
+"""The credential types an issuer grants, from Almena's catalogue (the trust
+anchor's, `registry_api.trust_anchor`), and the
 form a holder fills in to ask for each — together, its offers.
 
 Any member declares them, as with the rest of an issuer's data; only types a
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from registry_api import credential_catalog as catalog
+from registry_api import trust_anchor
 from registry_api.api.routes.auth import DbSession
 from registry_api.api.routes.directory import TenantId
 from registry_api.models import Form, Issuer
@@ -26,7 +28,7 @@ router = APIRouter(
 
 class CredentialTypes(BaseModel):
     # Ids of the credential type catalogue, in its order.
-    types: list[str] = Field(max_length=len(catalog.TYPES))
+    types: list[str] = Field(max_length=200)
     # For each type, the form holders fill in to ask for it.
     forms: dict[str, uuid.UUID] = Field(default_factory=dict)
 
@@ -70,7 +72,9 @@ async def set_types(
     tenant_id: TenantId, issuer_id: uuid.UUID, body: CredentialTypes, db: DbSession
 ) -> CredentialTypes:
     item = await _issuer(db, tenant_id, issuer_id)
-    if set(body.types) - set(catalog.ISSUABLE):
+    # Almena's, and the tenant's own.
+    issuable = catalog.issuable((await trust_anchor.load(db, tenant_id)).types)
+    if set(body.types) - set(issuable):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="credential_type_invalid")
     if set(body.forms) - set(body.types):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="request_form_invalid")
@@ -87,7 +91,7 @@ async def set_types(
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT, detail="request_form_invalid"
             )
-    item.credential_types = [type_id for type_id in catalog.ISSUABLE if type_id in body.types]
+    item.credential_types = [type_id for type_id in issuable if type_id in body.types]
     item.request_forms = {key: str(value) for key, value in body.forms.items()}
     await db.commit()
     return _out(item)

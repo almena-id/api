@@ -17,7 +17,7 @@ async def test_a_draft_is_seen_only_inside_its_tenant(
 ) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
     base = f"/api/v1/tenants/{tenant}/{kind}"
-    body: dict[str, str] = {"name": "Uni", "description": "Degrees"}
+    body: dict[str, Any] = {"name": "Uni", "description": {"en": "Degrees"}}
     if kind == "mediators":
         body["subdomain"] = "mediator"
         body["domain_id"] = await verified_domain(client, headers, tenant, dns)

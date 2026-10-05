@@ -1,0 +1,29 @@
+:root{color-scheme:light dark;supported-color-schemes:light dark}
+@font-face{font-family:"Chakra Petch";font-weight:600;src:url($fonts/chakra-petch-600.woff2) format("woff2")}
+@font-face{font-family:"Inter";font-weight:100 900;src:url($fonts/inter.woff2) format("woff2")}
+@font-face{font-family:"JetBrains Mono";font-weight:100 800;src:url($fonts/jetbrains-mono.woff2) format("woff2")}
+body{margin:0;padding:0;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}
+a{color:#18804a}
+@media (max-width:520px){
+  .card-pad{padding:28px 22px !important}
+  .code{font-size:30px !important;letter-spacing:8px !important}
+}
+@media (prefers-color-scheme:dark){
+  .bg{background:#0f1013 !important}
+  .card{background:#17191c !important;border-color:#2a2d31 !important}
+  .text{color:#f4f4f6 !important}
+  .muted{color:#a1a3a9 !important}
+  .brand{color:#34b56c !important}
+  .code-box{background:#11291b !important;border-color:#1f5134 !important}
+  .code{color:#4fd08a !important}
+  .rule{border-color:#2a2d31 !important}
+  .button a{color:#ffffff !important}
+}
+[data-ogsc] .bg{background:#0f1013 !important}
+[data-ogsc] .card{background:#17191c !important;border-color:#2a2d31 !important}
+[data-ogsc] .text{color:#f4f4f6 !important}
+[data-ogsc] .muted{color:#a1a3a9 !important}
+[data-ogsc] .brand{color:#34b56c !important}
+[data-ogsc] .code-box{background:#11291b !important;border-color:#1f5134 !important}
+[data-ogsc] .code{color:#4fd08a !important}
+[data-ogsc] .rule{border-color:#2a2d31 !important}

@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import dids, logs, mediators
+from registry_api import dids, logs, mediators, texts
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.config import get_settings
 from registry_api.models import (
@@ -72,16 +72,22 @@ class NamedIn(BaseModel):
         return value
 
 
+def _texts(value: dict[str, str] | None) -> dict[str, str] | None:
+    """A description by language (`registry_api.texts`), none when empty."""
+    return (texts.clean(value, 2000) or None) if value is not None else None
+
+
 class DescribedIn(NamedIn):
-    description: str | None = Field(default=None, max_length=2000)
+    # By language (`{"en": …, "es": …}`); its name is one, the entity's own.
+    description: dict[str, str] | None = None
     # One of the tenant's mediators, or a published public one, to receive
     # messages through; optional.
     mediator_id: uuid.UUID | None = None
 
     @field_validator("description")
     @classmethod
-    def _blank_is_none(cls, value: str | None) -> str | None:
-        return _clean(value)
+    def _blank_is_none(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        return _texts(value)
 
 
 class MediatorIn(NamedIn):
@@ -97,8 +103,14 @@ class DescribedPatch(BaseModel):
     # Each field is changed only when sent; `description` or `mediator_id`
     # sent as `null` removes it.
     name: str | None = Field(default=None, max_length=200)
-    description: str | None = Field(default=None, max_length=2000)
+    # By language.
+    description: dict[str, str] | None = None
     mediator_id: uuid.UUID | None = None
+
+    @field_validator("description")
+    @classmethod
+    def _blank_is_none(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        return _texts(value)
 
 
 class MediatorPatch(BaseModel):
@@ -114,6 +126,8 @@ class MediatorPatch(BaseModel):
 class IdentityRef(BaseModel):
     id: uuid.UUID
     name: str
+    # Its DID; `null` while pending.
+    did: str | None = None
 
 
 class MediatorRef(BaseModel):
@@ -132,8 +146,8 @@ class Use(BaseModel):
 class ItemOut(BaseModel):
     id: uuid.UUID
     name: str
-    # Issuers and verifiers carry one; identities and mediators do not.
-    description: str | None = None
+    # Issuers and verifiers carry one, by language; identities and mediators do not.
+    description: dict[str, str] | None = None
     created_at: datetime
     # Issuers, verifiers and mediators: the identity they act as.
     identity: IdentityRef | None = None
@@ -228,7 +242,7 @@ def _decode(cursor: str) -> tuple[datetime, uuid.UUID]:
 def _out(item: Item, used_by: list[Use] | None = None) -> ItemOut:
     identity = mediator = None
     if isinstance(item, Issuer | Verifier | Mediator):
-        identity = IdentityRef(id=item.identity.id, name=item.identity.name)
+        identity = IdentityRef(id=item.identity.id, name=item.identity.name, did=item.identity.did)
     if isinstance(item, Issuer | Verifier) and item.mediator is not None:
         mediator = MediatorRef(
             id=item.mediator.id,
@@ -456,7 +470,7 @@ async def _update_described(
     if "mediator_id" in sent:
         item.mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
     if "description" in sent:
-        item.description = _clean(body.description)
+        item.description = body.description
     if "name" in sent:
         _rename(item, body.name)
     await db.commit()

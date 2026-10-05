@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import JSON, ForeignKey, String, Text, Uuid
+from sqlalchemy import JSON, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from registry_api.models.base import (
@@ -26,7 +26,8 @@ class Issuer(QueueMixin, SigningMixin, PublishedMixin, TimestampMixin, Base):
         Uuid, ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
     name: Mapped[str] = mapped_column(String(200))
-    description: Mapped[str | None] = mapped_column(Text)
+    # By language (`registry_api.texts`); none until written.
+    description: Mapped[dict[str, str] | None] = mapped_column(JSON)
     # The DID it issues as: an identity of its own, created with it and named
     # like it (never shared with the tenant or another issuer or verifier).
     identity_id: Mapped[uuid.UUID] = mapped_column(

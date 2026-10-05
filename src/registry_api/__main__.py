@@ -1,7 +1,8 @@
 """Entry point: ``registry-api`` or ``python -m registry_api``.
 
 With no command it runs the API; ``registry-api init-root --admin <email>``
-creates the root tenant (Almena) once, at install.
+creates the root tenant (Almena Trust Anchor, with Almena's catalogue) once,
+at install.
 """
 
 import argparse
@@ -14,6 +15,7 @@ from registry_api.config import get_settings
 from registry_api.db import get_engine, get_sessionmaker
 from registry_api.mediators import MediatorError
 from registry_api.root import ROOT_MEDIATOR_URL, RootExists, create_root
+from registry_api.trust_anchor import ANCHOR_NAME
 
 
 def serve() -> None:
@@ -52,9 +54,9 @@ async def init_root(name: str, admin: str, mediator_url: str) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="registry-api")
     commands = parser.add_subparsers(dest="command")
-    root = commands.add_parser("init-root", help="create the root tenant (Almena), once")
+    root = commands.add_parser("init-root", help="create the root tenant (the trust anchor), once")
     root.add_argument("--admin", required=True, help="email of its first admin")
-    root.add_argument("--name", default="Almena", help="its name (default: Almena)")
+    root.add_argument("--name", default=ANCHOR_NAME, help=f"its name (default: {ANCHOR_NAME})")
     root.add_argument(
         "--mediator-url",
         default=ROOT_MEDIATOR_URL,

@@ -31,7 +31,7 @@ from typing import Any
 import jwt
 from fastapi import HTTPException, status
 
-from registry_api import credential_catalog, wallet
+from registry_api import wallet
 
 
 def _b64(data: bytes) -> str:
@@ -56,7 +56,7 @@ def document(
     *,
     issuer: str,
     key: str,
-    type_id: str,
+    vct: str,
     holder: str,
     claims: dict[str, Any],
     valid_until: datetime,
@@ -72,7 +72,7 @@ def document(
             "iss": issuer,
             "iat": int(datetime.now(UTC).timestamp()),
             "exp": int(valid_until.timestamp()),
-            "vct": credential_catalog.vct(credential_catalog.BY_ID[type_id]),
+            "vct": vct,
             "cnf": {"kid": holder},
             "_sd_alg": "sha-256",
             "_sd": sorted(digest(text) for text in disclosures),

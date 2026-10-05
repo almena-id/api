@@ -1,8 +1,10 @@
-"""The root authority: Almena, the tenant that governs the network.
+"""The root authority: Almena Trust Anchor, the tenant that governs the network.
 
 It is an ordinary tenant with no keys of its own on the server: it is created
 once at install, by ``registry-api init-root``, and its first admin is invited
-by email. Its identity is the identity domain's own DID
+by email. It is the trust anchor (`registry_api.trust_anchor`): it is made with
+Almena's catalogue — fields, value domains, credential types — which every
+tenant uses, and keeps it as data from then on. Its identity is the identity domain's own DID
 (``did:webvh:{SCID}:almena.id``, also served as ``did:web:almena.id``), the
 one wallets trust; the keys in its document arrive when its admins sign from
 their wallets.
@@ -18,7 +20,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import mediators
+from registry_api import mediators, trust_anchor
+from registry_api.field_catalog import LANGUAGES
 from registry_api.models import Identity, Mediator, Tenant, TenantInvitation
 
 # The root's mediator, created with it, and where it listens unless told.
@@ -49,8 +52,8 @@ async def default_mediator(db: AsyncSession) -> Mediator | None:
 async def create_root(
     db: AsyncSession, name: str, admin: str, mediator_url: str = ROOT_MEDIATOR_URL
 ) -> tuple[Tenant, Mediator]:
-    """The root tenant, with its identity and its mediator, and `admin`
-    invited to run it; they join the next time they sign
+    """The root tenant, with its identity, its mediator and the catalogue it
+    keeps for everyone, and `admin` invited to run it; they join the next time they sign
     in with that address. `mediator_url` must be one a mediator may have
     (https; `MediatorError` otherwise)."""
     # Imported here: the routes import this module.
@@ -59,7 +62,8 @@ async def create_root(
     if await root_tenant(db) is not None:
         raise RootExists
     url = mediators.endpoint(mediator_url)
-    tenant = await new_tenant(db, name)
+    # Almena's catalogue is everyone's: named in every language of the platform.
+    tenant = await new_tenant(db, name, languages=list(LANGUAGES))
     tenant.root = True
     now = datetime.now(UTC)
     relay = Identity(tenant_id=tenant.id, name=ROOT_MEDIATOR, created_at=now)
@@ -75,6 +79,7 @@ async def create_root(
     )
     db.add(mediator)
     db.add(TenantInvitation(tenant_id=tenant.id, email=admin.strip().lower(), role="admin"))
+    await trust_anchor.seed(db, tenant.id)
     await db.commit()
     await db.refresh(mediator, ["identity"])
     return tenant, mediator

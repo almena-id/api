@@ -37,6 +37,7 @@ import gzip
 import hashlib
 import json
 import time
+import uuid
 import zlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -51,7 +52,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import credential_catalog as catalog
-from registry_api import dids, wallet
+from registry_api import dids, trust_anchor, wallet
 from registry_api.config import get_settings
 from registry_api.models import Identity, Issuer
 
@@ -188,7 +189,9 @@ async def _signed_by_issuer(db: AsyncSession, token: str, did: str) -> dict[str,
     raise last
 
 
-async def _trusted(db: AsyncSession, entry: dict[str, Any], did: str) -> None:
+async def _trusted(db: AsyncSession, entry: dict[str, Any], did: str, tenant_id: uuid.UUID) -> None:
+    """A published issuer granting the type — a tenant's own type: one of that
+    tenant's issuers —, and, under `issuers`, one of those named."""
     if entry["trust"] == "framework":
         raise Problem("trust_framework_unsupported")
     identity = await registry_identity(db, did)
@@ -202,6 +205,9 @@ async def _trusted(db: AsyncSession, entry: dict[str, Any], did: str) -> None:
         else None
     )
     if issuer is None or entry["type"] not in (issuer.credential_types or []):
+        raise Problem("issuer_untrusted")
+    if entry["type"].startswith(catalog.PREFIX) and issuer.tenant_id != tenant_id:
+        # Another tenant's type of the same name is not this one.
         raise Problem("issuer_untrusted")
     if (
         entry["trust"] == "issuers"
@@ -332,6 +338,8 @@ async def _sd_jwt(
     presentation: str,
     entry: dict[str, Any],
     *,
+    item: catalog.CredentialType,
+    tenant_id: uuid.UUID,
     nonce: str,
     audience: str,
     fetch: StatusFetch,
@@ -345,10 +353,9 @@ async def _sd_jwt(
     issuer = str(unverified.get("iss", ""))
     if unverified.get("_sd_alg", "sha-256") != "sha-256":
         raise Problem("format_invalid")
-    item = catalog.BY_ID[entry["type"]]
     if unverified.get("vct") != catalog.vct(item):
         raise Problem("type_mismatch")
-    await _trusted(db, entry, issuer)
+    await _trusted(db, entry, issuer, tenant_id)
     payload = await _signed_by_issuer(db, issued, issuer)
 
     header, _ = _unverified(binding)
@@ -380,6 +387,8 @@ async def _w3c(
     presentation: str,
     entry: dict[str, Any],
     *,
+    item: catalog.CredentialType,
+    tenant_id: uuid.UUID,
     nonce: str,
     audience: str,
     fetch: StatusFetch,
@@ -403,10 +412,9 @@ async def _w3c(
     body = unverified.get("vc", unverified)
     issuer = unverified.get("iss") or body.get("issuer")
     issuer = str(issuer.get("id") if isinstance(issuer, dict) else issuer or "")
-    item = catalog.BY_ID[entry["type"]]
     if item.w3c_type not in body.get("type", []):
         raise Problem("type_mismatch")
-    await _trusted(db, entry, issuer)
+    await _trusted(db, entry, issuer, tenant_id)
     signed = await _signed_by_issuer(db, token, issuer)
     body = signed.get("vc", signed)
     now = time.time()
@@ -444,12 +452,15 @@ async def verify(
     credentials: list[dict[str, Any]],
     vp_token: dict[str, list[str]],
     *,
+    tenant_id: uuid.UUID,
     nonce: str,
     audience: str,
     fetch: StatusFetch,
 ) -> list[Checked]:
     """Each credential the form asks for, as presented in `vp_token` (keyed by
-    the form's DCQL query ids): verified, or why not."""
+    the form's DCQL query ids): verified, or why not. `tenant_id`, the form's:
+    whose own types it may ask for."""
+    types = (await trust_anchor.load(db, tenant_id)).types
     known = {
         f"{entry['key']}_{suffix}": (entry, suffix) for entry in credentials for suffix in VERIFIERS
     }
@@ -463,13 +474,23 @@ async def verify(
             continue
         result.presented, result.query, result.format = True, query, FORMATS[suffix]
         try:
+            item = types.get(entry["type"])
+            if item is None:
+                raise Problem("type_mismatch")
             issuer, claims = await VERIFIERS[suffix](
-                db, presentations[0], entry, nonce=nonce, audience=audience, fetch=fetch
+                db,
+                presentations[0],
+                entry,
+                item=item,
+                tenant_id=tenant_id,
+                nonce=nonce,
+                audience=audience,
+                fetch=fetch,
             )
             result.issuer = issuer
             # The type's always-present claims must be there; its optional ones,
             # when asked for, are passed on if the credential has them.
-            always = {c.field for c in catalog.BY_ID[entry["type"]].claims if c.required}
+            always = {c.name for c in item.claims if c.required}
             if any(claim in always and claim not in claims for claim in entry["claims"]):
                 raise Problem("claims_missing")
             result.claims = {claim: claims[claim] for claim in entry["claims"] if claim in claims}

@@ -76,6 +76,7 @@ from registry_api import (
     presentations,
     queues,
     status_lists,
+    trust_anchor,
     wallet,
     webvh,
 )
@@ -135,8 +136,15 @@ async def _offering(db: AsyncSession, slug: str, type_id: str) -> tuple[Issuer, 
 
 async def offer_view(db: AsyncSession, issuer: Issuer, form: Form, type_id: str) -> dict[str, Any]:
     """What a holder sees of an offer: the issuer, the credential type and the
-    form — its fields with their definitions, the credentials it asks for."""
+    form — its fields with their definitions, the credentials it asks for,
+    each with its type's name (the tenant's own types are not Almena's)."""
     filled = form_credentials.fills(form.credentials, form.fields)
+    known = await trust_anchor.load(db, issuer.tenant_id)
+
+    def asked(entry: dict[str, Any]) -> dict[str, Any]:
+        kind = known.types.get(entry["type"])
+        return {**entry, "fills": filled[entry["key"]], "labels": kind.labels if kind else {}}
+
     return {
         "issuer": {
             "slug": issuer.slug,
@@ -144,7 +152,7 @@ async def offer_view(db: AsyncSession, issuer: Issuer, form: Form, type_id: str)
             "description": issuer.description,
             "did": issuer.identity.did,
         },
-        "credential_type": credentials.type_out(credentials.BY_ID[type_id]),
+        "credential_type": credentials.type_out(known.types[type_id]),
         "form": {
             "slug": form.slug,
             "name": form.name,
@@ -153,7 +161,7 @@ async def offer_view(db: AsyncSession, issuer: Issuer, form: Form, type_id: str)
                 {**stored, "key": key, "field": catalog.field_out(item)}
                 for key, stored, item in await checks.fields_of(db, form)
             ],
-            "credentials": [{**entry, "fills": filled[entry["key"]]} for entry in form.credentials],
+            "credentials": [asked(entry) for entry in form.credentials],
         },
     }
 
@@ -171,7 +179,8 @@ async def get_offer(issuer_slug: str, type_id: str, db: DbSession) -> dict[str, 
 class OfferIssuer(BaseModel):
     slug: str
     name: str
-    description: str | None
+    # By language.
+    description: dict[str, str] | None
     did: str
 
 
@@ -200,14 +209,30 @@ class OfferPage(BaseModel):
     total: int
 
 
-def _offered(granted: list[str] | None, forms: dict[str, str] | None) -> list[str]:
+def _offered(
+    known: trust_anchor.Catalogue, granted: list[str] | None, forms: dict[str, str] | None
+) -> list[str]:
     """The types an issuer offers, in the order it grants them: granted, with a
     form to apply, and still in the catalogue."""
-    return [t for t in granted or [] if t in (forms or {}) and t in credentials.BY_ID]
+    return [t for t in granted or [] if t in (forms or {}) and t in known.types]
 
 
-def _offers_of(issuer: Issuer) -> list[str]:
-    return _offered(issuer.credential_types, issuer.request_forms)
+def _offers_of(known: trust_anchor.Catalogue, issuer: Issuer) -> list[str]:
+    return _offered(known, issuer.credential_types, issuer.request_forms)
+
+
+class _Catalogues:
+    """The catalogue as each tenant sees it, loaded once: issuers offer their
+    tenant's own types beside Almena's."""
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+        self.seen: dict[uuid.UUID, trust_anchor.Catalogue] = {}
+
+    async def of(self, tenant_id: uuid.UUID) -> trust_anchor.Catalogue:
+        if tenant_id not in self.seen:
+            self.seen[tenant_id] = await trust_anchor.load(self.db, tenant_id)
+        return self.seen[tenant_id]
 
 
 def _offer_cursor(issuer: Issuer, type_id: str) -> str:
@@ -225,8 +250,8 @@ def _offer_position(cursor: str) -> tuple[datetime, uuid.UUID, str]:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_cursor") from None
 
 
-def _offer_entry(issuer: Issuer, type_id: str) -> OfferEntry:
-    item = credentials.BY_ID[type_id]
+def _offer_entry(known: trust_anchor.Catalogue, issuer: Issuer, type_id: str) -> OfferEntry:
+    item = known.types[type_id]
     return OfferEntry(
         issuer=OfferIssuer(
             slug=issuer.slug,
@@ -238,7 +263,9 @@ def _offer_entry(issuer: Issuer, type_id: str) -> OfferEntry:
             id=item.id,
             labels=item.labels,
             descriptions=item.descriptions,
-            category=OfferCategory(id=item.category, labels=credentials.CATEGORIES[item.category]),
+            category=OfferCategory(
+                id=item.category, labels=known.type_categories.get(item.category, {})
+            ),
         ),
     )
 
@@ -262,9 +289,14 @@ async def list_offers(
         .order_by(Issuer.published_at.desc(), Issuer.id.desc())
     )
     granted = await db.execute(
-        select(Issuer.credential_types, Issuer.request_forms).join(Issuer.identity).where(*listed)
+        select(Issuer.tenant_id, Issuer.credential_types, Issuer.request_forms)
+        .join(Issuer.identity)
+        .where(*listed)
     )
-    total = sum(len(_offered(types, forms)) for types, forms in granted)
+    catalogues = _Catalogues(db)
+    total = 0
+    for tenant_id, types, forms in granted:
+        total += len(_offered(await catalogues.of(tenant_id), types, forms))
     after: str | None = None
     if cursor:
         moment, issuer_id, after = _offer_position(cursor)
@@ -283,7 +315,7 @@ async def list_offers(
     while len(found) <= limit:
         issuers = list(await db.scalars(query.offset(skip).limit(batch)))
         for issuer in issuers:
-            types = _offers_of(issuer)
+            types = _offers_of(await catalogues.of(issuer.tenant_id), issuer)
             if issuer.id == first and after is not None:
                 types = types[types.index(after) + 1 :] if after in types else []
             found.extend((issuer, type_id) for type_id in types)
@@ -293,7 +325,10 @@ async def list_offers(
     page = found[:limit]
     more = len(found) > limit
     return OfferPage(
-        items=[_offer_entry(issuer, type_id) for issuer, type_id in page],
+        items=[
+            _offer_entry(await catalogues.of(issuer.tenant_id), issuer, type_id)
+            for issuer, type_id in page
+        ],
         next_cursor=_offer_cursor(*page[-1]) if more else None,
         total=total,
     )
@@ -505,7 +540,7 @@ async def upload_file(
         raise _refuse("file_field_unknown", status.HTTP_422_UNPROCESSABLE_CONTENT)
     stored, field = found[key]
     allowed = catalog.media_types(
-        stored.get("narrow", {}).get("values") or catalog.domain_values(field)
+        field, stored.get("narrow", {}).get("values") or catalog.domain_values(field)
     )
     media_type = (file.content_type or "").split(";")[0].strip().lower()
     if media_type not in allowed:
@@ -560,7 +595,7 @@ def _label(labels: dict[str, str]) -> dict[str, str]:
 def _text(item: catalog.Field, value: Any, lang: str) -> str:
     """An answer as a person reads it, in `lang`."""
     if item.type in ("code", "codes"):
-        codes = item.codes or (catalog.domains()[item.domain].codes if item.domain else ())
+        codes = catalog.codes_of(item)
         names = {code.value: _label(code.labels)[lang] for code in codes}
         chosen = value if isinstance(value, list) else [value]
         return ", ".join(names.get(one, str(one)) for one in chosen)
@@ -736,7 +771,8 @@ async def read_request(application_id: uuid.UUID, db: DbSession) -> dict[str, An
     item = await _asked(db, application_id)
     issuer, form = await _parts(db, item)
     purpose = item.wallet_purpose
-    kind = credentials.BY_ID[item.credential_type]
+    types = (await trust_anchor.load(db, issuer.tenant_id)).types
+    kind = types[item.credential_type]
     request: dict[str, Any] = {
         "response_type": {
             "pair": "id_token",
@@ -758,7 +794,7 @@ async def read_request(application_id: uuid.UUID, db: DbSession) -> dict[str, An
         "holder": item.holder_did,
     }
     if purpose == "present":
-        request["dcql_query"] = form_credentials.dcql(form.credentials)
+        request["dcql_query"] = form_credentials.dcql(types, form.credentials)
     if purpose == "submit":
         signed = await content(db, item)
         request["submission"] = {"content": signed, "digest": content_digest(signed)}
@@ -855,6 +891,7 @@ async def answer_request(
                 db,
                 form.credentials,
                 token,
+                tenant_id=form.tenant_id,
                 nonce=str(item.wallet_nonce),
                 audience=_client_id(),
                 fetch=fetch,
@@ -916,7 +953,7 @@ async def _deliver(db: AsyncSession, item: Application, token: object) -> Respon
     if did != item.holder_did:
         raise _refuse("not_the_holder", bad)
     issuer, _ = await _parts(db, item)
-    kind = credentials.BY_ID[item.credential_type]
+    kind = (await trust_anchor.load(db, issuer.tenant_id)).types[item.credential_type]
     item.wallet_answered = True
     item.delivered_at = datetime.now(UTC)
     await db.commit()

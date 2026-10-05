@@ -10,6 +10,8 @@ from tests.conftest import Outbox
 from tests.signing import publish, ready, sign
 from tests.test_directory import _sign_in
 
+pytestmark = pytest.mark.no_anchor
+
 
 @pytest.fixture(autouse=True)
 def did_url(monkeypatch: pytest.MonkeyPatch) -> None:

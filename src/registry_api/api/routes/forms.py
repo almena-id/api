@@ -29,11 +29,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
 from registry_api import field_catalog as catalog
-from registry_api import form_credentials, presentations, texts
+from registry_api import form_credentials, presentations, texts, trust_anchor
 from registry_api.api.routes.auth import DbSession
-from registry_api.api.routes.custom_fields import PREFIX, custom_catalog
 from registry_api.api.routes.directory import TenantId
 from registry_api.models import Form
+from registry_api.trust_anchor import PREFIX
 
 router = APIRouter(prefix="/tenants/{tenant_id}/forms", tags=["forms"])
 
@@ -143,9 +143,9 @@ def _key(ref: str) -> str:
     return ref.removeprefix(PREFIX)
 
 
-def _field(field: FormField, custom: Fields, index: int) -> tuple[str, dict[str, Any]]:
+def _field(field: FormField, known: Fields, index: int) -> tuple[str, dict[str, Any]]:
     """The field's key in the form and the field as stored, or why it cannot be."""
-    item = catalog.BY_ID.get(field.ref) or custom.get(field.ref)
+    item = known.get(field.ref)
     if item is None:
         raise _refuse("field_unknown", index)
     if field.as_ is not None:
@@ -160,8 +160,8 @@ def _field(field: FormField, custom: Fields, index: int) -> tuple[str, dict[str,
     return field.as_ or _key(field.ref), stored
 
 
-def _fields(fields: list[FormField], custom: Fields) -> list[dict[str, Any]]:
-    keyed = [_field(field, custom, index) for index, field in enumerate(fields)]
+def _fields(fields: list[FormField], known: Fields) -> list[dict[str, Any]]:
+    keyed = [_field(field, known, index) for index, field in enumerate(fields)]
     seen: set[str] = set()
     for index, (key, _) in enumerate(keyed):
         if key in seen:
@@ -171,14 +171,14 @@ def _fields(fields: list[FormField], custom: Fields) -> list[dict[str, Any]]:
     return [stored for _, stored in keyed]
 
 
-def form_schema(form: Form, custom: Fields) -> dict[str, Any]:
+def form_schema(form: Form, known: Fields) -> dict[str, Any]:
     """The JSON Schema 2020-12 a form's answers meet: each of Almena's fields is
     the catalogue's published schema (`$ref`), made stricter where the form
     narrows it; the tenant's own fields, unpublished, are written out whole."""
     properties: dict[str, Any] = {}
     required: list[str] = []
     for stored in form.fields:
-        item = catalog.BY_ID.get(stored["ref"]) or custom[stored["ref"]]
+        item = known[stored["ref"]]
         key = stored.get("as", _key(item.id))
         narrow = stored.get("narrow", {})
         schema: dict[str, Any]
@@ -199,7 +199,7 @@ def form_schema(form: Form, custom: Fields) -> dict[str, Any]:
                 schema["items"] = {"enum": narrow["values"]}
             else:
                 schema["properties"] = {
-                    "media_type": {"enum": catalog.media_types(narrow["values"])}
+                    "media_type": {"enum": catalog.media_types(item, narrow["values"])}
                 }
         if "min_date" in narrow:
             schema["formatMinimum"] = narrow["min_date"]
@@ -266,12 +266,13 @@ async def list_forms(tenant_id: TenantId, db: DbSession) -> list[FormOut]:
 async def create_form(tenant_id: TenantId, body: FormIn, db: DbSession) -> FormOut:
     if not body.fields and not body.credentials:
         raise _refuse("fields_required")
+    found = await trust_anchor.load(db, tenant_id)
     item = Form(
         tenant_id=tenant_id,
         name=body.name,
         description=body.description,
-        fields=_fields(body.fields, await custom_catalog(db, tenant_id)),
-        credentials=await form_credentials.stored(db, body.credentials),
+        fields=_fields(body.fields, found.fields),
+        credentials=await form_credentials.stored(db, found.types, body.credentials, tenant_id),
     )
     db.add(item)
     await db.commit()
@@ -295,7 +296,7 @@ async def get_form(tenant_id: TenantId, form_id: uuid.UUID, db: DbSession) -> Fo
 )
 async def get_form_schema(tenant_id: TenantId, form_id: uuid.UUID, db: DbSession) -> dict[str, Any]:
     form = await _owned(db, tenant_id, form_id)
-    return form_schema(form, await custom_catalog(db, tenant_id))
+    return form_schema(form, (await trust_anchor.load(db, tenant_id)).fields)
 
 
 @router.get(
@@ -305,7 +306,7 @@ async def get_form_schema(tenant_id: TenantId, form_id: uuid.UUID, db: DbSession
 )
 async def get_form_dcql(tenant_id: TenantId, form_id: uuid.UUID, db: DbSession) -> dict[str, Any]:
     form = await _owned(db, tenant_id, form_id)
-    return form_credentials.dcql(form.credentials)
+    return form_credentials.dcql((await trust_anchor.load(db, tenant_id)).types, form.credentials)
 
 
 StatusFetch = Annotated[presentations.StatusFetch, Depends(presentations.get_status_fetch)]
@@ -384,6 +385,12 @@ async def verify_presentations(
 ) -> VerifyOut:
     form = await _owned(db, tenant_id, form_id)
     checked = await presentations.verify(
-        db, form.credentials, body.vp_token, nonce=body.nonce, audience=body.audience, fetch=fetch
+        db,
+        form.credentials,
+        body.vp_token,
+        tenant_id=form.tenant_id,
+        nonce=body.nonce,
+        audience=body.audience,
+        fetch=fetch,
     )
     return verdict(form, checked)

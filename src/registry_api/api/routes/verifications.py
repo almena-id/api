@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
-from registry_api import form_credentials, presentations, queues
+from registry_api import form_credentials, presentations, queues, trust_anchor
 from registry_api.api.routes.auth import CurrentSession, DbSession, as_utc
 from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.forms import VerifyOut, verdict
@@ -194,7 +194,9 @@ async def read_request(verification_id: uuid.UUID, db: DbSession) -> dict[str, A
         "verifier": {"did": verifier.identity.did, "name": verifier.name},
         # What it is for, in the form's languages: the wallet picks its own.
         "form": {"name": form.name, "description": form.description},
-        "dcql_query": form_credentials.dcql(form.credentials),
+        "dcql_query": form_credentials.dcql(
+            (await trust_anchor.load(db, form.tenant_id)).types, form.credentials
+        ),
         "credentials": [
             {
                 "key": entry["key"],
@@ -252,7 +254,13 @@ async def answer_request(
     token = await _vp_token(request)
     form = await db.get_one(Form, item.form_id)
     checked = await presentations.verify(
-        db, form.credentials, token, nonce=item.nonce, audience=_client_id(), fetch=fetch
+        db,
+        form.credentials,
+        token,
+        tenant_id=form.tenant_id,
+        nonce=item.nonce,
+        audience=_client_id(),
+        fetch=fetch,
     )
     result = verdict(form, checked)
     item.answered_at = datetime.now(UTC)

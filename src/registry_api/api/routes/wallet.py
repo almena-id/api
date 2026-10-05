@@ -530,7 +530,7 @@ async def _account_for(db: AsyncSession, did: str, locale: Locale) -> User:
     user = User(email=None)
     db.add(user)
     await db.flush()
-    tenant = await new_tenant(db, None, _UNNAMED[locale])
+    tenant = await new_tenant(db, None, _UNNAMED[locale], languages=[locale])
     db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="admin"))
     db.add(UserIdentity(user_id=user.id, provider=PROVIDER, subject=did, email=None))
     await db.flush()

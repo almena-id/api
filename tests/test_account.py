@@ -148,7 +148,7 @@ async def test_an_empty_account_moves_to_the_owner(
     # The empty account and its tenant are gone, and so is its session.
     assert await db.scalar(select(User).where(User.email == "ada@example.org")) is None
     assert await db.scalar(select(TenantMember).where(TenantMember.user_id == ada_id)) is None
-    names = list(await db.scalars(select(Tenant.name)))
+    names = list(await db.scalars(select(Tenant.name).where(Tenant.root.is_(False))))
     assert names == ["Tenant of owner@example.org"]
     assert (await client.get("/api/v1/auth/me", headers=ada)).status_code == 401
 

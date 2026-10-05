@@ -1,6 +1,8 @@
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import field_catalog as catalog
+from registry_api import trust_anchor
 
 
 async def test_the_catalogue_is_published(client: AsyncClient) -> None:
@@ -48,15 +50,19 @@ async def test_each_field_publishes_its_json_schema(client: AsyncClient) -> None
         assert (await client.get(f"/schemas/fields/v1/{missing}")).status_code == 404
 
 
-def test_every_field_has_every_label() -> None:
+async def test_every_field_has_every_label(db: AsyncSession) -> None:
     def check(item: catalog.Field) -> None:
         assert set(item.labels) == set(catalog.LANGUAGES), item.id
         for part in item.parts:
             check(part.field)
 
-    for item in catalog.FIELDS:
+    found = await trust_anchor.load(db)
+    assert found.fields
+    for item in found.fields.values():
         check(item)
-        assert item.category in catalog.CATEGORIES
-    for domain in catalog.domains().values():
+        assert item.category in found.field_categories
+        if item.domain:
+            assert item.domain in found.domains, item.id
+    for domain in found.domains.values():
         for code in domain.codes:
             assert set(code.labels) == set(catalog.LANGUAGES), (domain.id, code.value)
