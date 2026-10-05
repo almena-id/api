@@ -1,9 +1,10 @@
 """Settings, read from ``REGISTRY_*`` environment variables (and ``.env``)."""
 
 from functools import lru_cache
+from ipaddress import ip_address
 from typing import Literal
 
-from pydantic import Field, PostgresDsn, SecretStr
+from pydantic import Field, IPvAnyAddress, PostgresDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +35,13 @@ class Settings(BaseSettings):
     # Directory holding the origin's `did-configuration.json`, served under
     # /.well-known/; empty serves none. (Its `did.json` is the root tenant's.)
     well_known_dir: str = ""
+    # Public resolvers asked for a domain's TXT proof (registry_api.dns_proof),
+    # each on its own, instead of the system's: a local resolver can cache the
+    # record's absence from a check made before it was published.
+    dns_resolvers: list[IPvAnyAddress] = Field(
+        default_factory=lambda: [ip_address("1.1.1.1"), ip_address("8.8.8.8")],
+        min_length=1,
+    )
 
     db_host: str = "localhost"
     db_port: int = 5432

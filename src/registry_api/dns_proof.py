@@ -1,16 +1,25 @@
 """Proving a domain with DNS: a TXT record the owner publishes.
 
 A tenant links a domain (`api/routes/domains.py`) and gets the record that
-proves it: ``_almena.{domain}`` saying ``almena-verify={token}``.
+proves it: ``_almena.{domain}`` saying ``almena-verify={token}``. The token is
+the same every time the tenant links that domain, so a record published once
+keeps proving it after the domain is removed and linked again. The record
+is looked up at public resolvers (``REGISTRY_DNS_RESOLVERS``), each asked on
+its own, so that one still caching its absence does not hide it.
 """
 
+import asyncio
+import base64
+import hashlib
 import re
-import secrets
+import uuid
 from collections.abc import Awaitable, Callable
 
 import dns.asyncresolver
 import dns.exception
 import dns.resolver
+
+from registry_api.config import get_settings
 
 # Where the proof is published, and how it starts.
 DNS_LABEL = "_almena"
@@ -42,8 +51,12 @@ def domain(typed: str) -> str:
     return value
 
 
-def new_token() -> str:
-    return secrets.token_urlsafe(24)
+def new_token(tenant_id: uuid.UUID, domain: str) -> str:
+    """The tenant's token for `domain`: always the same for that pair, another
+    for any other tenant. It need not be secret: only whoever runs the domain's
+    DNS can publish it."""
+    digest = hashlib.sha256(f"almena-verify:{tenant_id}:{domain}".encode()).digest()
+    return base64.urlsafe_b64encode(digest[:24]).decode()
 
 
 def dns_record(domain: str, token: str) -> tuple[str, str]:
@@ -54,15 +67,27 @@ def dns_record(domain: str, token: str) -> tuple[str, str]:
 TxtLookup = Callable[[str], Awaitable[list[str]]]
 
 
-async def txt_records(name: str) -> list[str]:
-    """The TXT records at `name`; none when it does not exist or does not answer."""
+async def _txt_at(nameserver: str, name: str) -> list[str] | None:
+    """The TXT records at `name` as one resolver sees them; None when it times out."""
+    resolver = dns.asyncresolver.Resolver(configure=False)
+    resolver.nameservers = [nameserver]
     try:
-        answer = await dns.asyncresolver.resolve(name, "TXT", lifetime=5)
+        answer = await resolver.resolve(name, "TXT", lifetime=5)
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
         return []
     except dns.exception.Timeout:
-        raise DomainError("dns_unavailable") from None
+        return None
     return [b"".join(record.strings).decode(errors="replace") for record in answer]
+
+
+async def txt_records(name: str) -> list[str]:
+    """The TXT records at `name`, as every public resolver sees them together;
+    none when it does not exist. Unavailable only when none answers."""
+    nameservers = [str(address) for address in get_settings().dns_resolvers]
+    answers = await asyncio.gather(*(_txt_at(server, name) for server in nameservers))
+    if all(answer is None for answer in answers):
+        raise DomainError("dns_unavailable")
+    return list(dict.fromkeys(record for answer in answers if answer for record in answer))
 
 
 def get_txt_lookup() -> TxtLookup:

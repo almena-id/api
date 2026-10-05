@@ -3,8 +3,10 @@
 Admins add a domain and get the DNS TXT record that proves it
 (``_almena.{domain}`` = ``almena-verify=…``); once the record is found the
 domain is verified and the tenant's DID document names it (`LinkedDomains`),
-which leaves its identity with changes to sign. Members see them. Removing a
-domain takes it out of the document the same way.
+which leaves its identity with changes to sign. A verified domain can be
+checked again: the record still there, it stays verified; gone, it stops being
+verified and leaves the document. Members see them. Removing a domain takes it
+out of the document the same way.
 """
 
 import uuid
@@ -101,7 +103,7 @@ async def add_domain(tenant_id: AdminTenant, body: DomainIn, db: DbSession) -> D
     item = TenantDomain(
         tenant_id=tenant_id,
         domain=domain,
-        dns_token=checks.new_token(),
+        dns_token=checks.new_token(tenant_id, domain),
         created_at=datetime.now(UTC),
     )
     db.add(item)
@@ -112,11 +114,15 @@ async def add_domain(tenant_id: AdminTenant, body: DomainIn, db: DbSession) -> D
 
 @router.post(
     "/{domain_id}/check",
-    summary="Look for the DNS record (admins): found, the domain is verified",
+    summary=(
+        "Look for the DNS record (admins): found, the domain is verified; "
+        "gone, a verified one stops being verified"
+    ),
     responses={
         status.HTTP_404_NOT_FOUND: {"description": "`domain_not_found`"},
-        status.HTTP_409_CONFLICT: {"description": "`domain_verified`"},
-        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "`dns_record_not_found`"},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "`dns_record_not_found`: a verified domain is no longer verified"
+        },
         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "`dns_unavailable`"},
     },
 )
@@ -124,14 +130,16 @@ async def check_domain(
     tenant_id: AdminTenant, domain_id: uuid.UUID, db: DbSession, lookup: TxtLookup
 ) -> DomainOut:
     item = await _owned(db, tenant_id, domain_id)
-    if item.verified_at is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="domain_verified")
     name, value = checks.dns_record(item.domain, item.dns_token)
     try:
         found = value in (record.strip() for record in await lookup(name))
     except checks.DomainError as error:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=error.code) from None
     if not found:
+        # The proof is gone: the domain leaves the DID document with it.
+        if item.verified_at is not None:
+            item.verified_at = None
+            await db.commit()
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="dns_record_not_found")
     item.verified_at = datetime.now(UTC)
     await db.commit()

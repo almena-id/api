@@ -20,6 +20,7 @@ services:
       REGISTRY_CORS_ORIGINS: ${REGISTRY_CORS_ORIGINS:-["https://registry.almena.id"]}
       # /.well-known/did.json and did-configuration.json, from ./well-known.
       REGISTRY_WELL_KNOWN_DIR: /app/well-known
+      REGISTRY_DNS_RESOLVERS: ${REGISTRY_DNS_RESOLVERS:-["1.1.1.1","8.8.8.8"]}
       # Docker's networks: trust X-Forwarded-* from a reverse proxy on them.
       REGISTRY_FORWARDED_ALLOW_IPS: ${REGISTRY_FORWARDED_ALLOW_IPS:-172.16.0.0/12}
       REGISTRY_DB_HOST: postgres

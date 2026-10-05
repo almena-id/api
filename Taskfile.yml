@@ -56,11 +56,9 @@ tasks:
       - docker compose up --detach --wait rabbitmq
 
   openbao:
-    desc: Start OpenBao in Docker (for task dev), unseal it (initializing it the first time) and provision it for the API; its UI is at http://localhost:8200/ui
+    desc: Start OpenBao in Docker (for task dev), sealed; then task openbao:unseal and task openbao:setup. Its UI is at http://localhost:8200/ui
     cmds:
       - docker compose up --detach --wait openbao
-      - task: openbao:unseal
-      - task: openbao:setup
 
   openbao:unseal:
     desc: Unseal the running OpenBao; the first time, initialize it and keep its unseal key and root token in .openbao-keys.json
@@ -114,14 +112,14 @@ tasks:
         } | docker compose exec -T openbao sh
 
   db:migrate:
-    desc: Apply the pending migrations to the database (starts PostgreSQL in Docker)
-    deps: [install, db]
+    desc: Apply the pending migrations to the database (PostgreSQL running, e.g. task db)
+    deps: [install]
     cmds:
       - uv run alembic upgrade head
 
   db:revision:
     desc: 'Autogenerate a migration from the models (task db:revision -- "add users")'
-    deps: [install, db]
+    deps: [install]
     requires:
       vars: [CLI_ARGS]
     cmds:
@@ -129,7 +127,7 @@ tasks:
 
   db:downgrade:
     desc: Revert the last migration
-    deps: [install, db]
+    deps: [install]
     prompt: Revert the last migration? Its data may be lost.
     cmds:
       - uv run alembic downgrade -1
@@ -149,8 +147,8 @@ tasks:
       - uv run python -m tests.fake_wallet {{.CLI_ARGS}}
 
   dev:
-    desc: Run the API locally with auto-reload against PostgreSQL, Mailpit, OpenObserve, RabbitMQ and OpenBao in Docker
-    deps: [db:migrate, mail, openobserve, rabbitmq, openbao]
+    desc: Run the API locally with auto-reload; PostgreSQL, Mailpit, OpenObserve, RabbitMQ and OpenBao must be running (task db, mail, openobserve, rabbitmq, openbao, openbao:unseal, openbao:setup, db:migrate)
+    deps: [install]
     env:
       REGISTRY_DB_HOST: 127.0.0.1
       REGISTRY_LOG_LEVEL: '{{.REGISTRY_LOG_LEVEL | default "DEBUG"}}'
@@ -187,7 +185,7 @@ tasks:
       - task: lint
       - task: test
 
-  build:
+  docker:build:
     desc: Build the Docker image
     cmds:
       - docker compose build
@@ -195,8 +193,11 @@ tasks:
   up:
     desc: Start the API and its services in Docker (detached), migrate, wait until healthy and unseal OpenBao
     cmds:
-      # OpenBao first: the API signs in to it as soon as it starts.
+      # OpenBao first, unsealed and provisioned: the API signs in to it as soon
+      # as it starts.
       - task: openbao
+      - task: openbao:unseal
+      - task: openbao:setup
       - docker compose up --build --detach --wait
 
   down:
