@@ -161,8 +161,8 @@ async def test_an_identity_shows_its_did_document(
         f"{base}/issuers/{issuer['id']}/publish", json={}, headers=headers
     )
     assert published.status_code == 409 and published.json()["detail"] == "identity_pending"
-    waiting = (await client.get(f"{base}/signatures", headers=headers)).json()
-    assert {(w["name"], w["signature"]) for w in waiting} >= {("Uni", "pending")}
+    waiting = (await client.get(f"{base}/pending", headers=headers)).json()
+    assert {(w["kind"], w["name"], w["state"]) for w in waiting} >= {("identity", "Uni", "pending")}
 
     # Ada links a wallet; she signs the tenant's identity, then the issuer's.
     wallet = FakeWallet()
@@ -229,7 +229,7 @@ async def test_an_identity_shows_its_did_document(
     lines = (await client.get(f"/ids/{slug}/did.jsonl")).text.splitlines()
     assert len(lines) == 2
     assert (await client.get(identity_url, headers=headers)).json()["signature"] == "signed"
-    waiting = (await client.get(f"{base}/signatures", headers=headers)).json()
+    waiting = (await client.get(f"{base}/pending", headers=headers)).json()
     assert issuer["identity"]["id"] not in [w["id"] for w in waiting]
     nothing = await client.post(f"{identity_url}/sign", json={}, headers=headers)
     assert nothing.status_code == 409 and nothing.json()["detail"] == "up_to_date"

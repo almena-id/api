@@ -74,7 +74,7 @@ async def anchor(
     if request.node.get_closest_marker("no_anchor"):
         return None
     async with database() as session:
-        tenant, _ = await create_root(session, ANCHOR_NAME, "anchor@example.net")
+        tenant = await create_root(session, ANCHOR_NAME, "anchor@example.net")
         return tenant
 
 

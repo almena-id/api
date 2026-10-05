@@ -17,6 +17,7 @@ from registry_api.api.routes import (
     issuance,
     issuer_credentials,
     members,
+    pending,
     publication,
     queues,
     signing,
@@ -52,6 +53,7 @@ api_router.include_router(status_lists.router)
 api_router.include_router(status_lists.credentials)
 api_router.include_router(directory.router)
 api_router.include_router(members.router)
+api_router.include_router(pending.router)
 api_router.include_router(publication.router)
 api_router.include_router(publication.catalog)
 api_router.include_router(signing.router)

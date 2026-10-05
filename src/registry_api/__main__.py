@@ -13,8 +13,7 @@ import uvicorn
 
 from registry_api.config import get_settings
 from registry_api.db import get_engine, get_sessionmaker
-from registry_api.mediators import MediatorError
-from registry_api.root import ROOT_MEDIATOR_URL, RootExists, create_root
+from registry_api.root import RootExists, create_root
 from registry_api.trust_anchor import ANCHOR_NAME
 
 
@@ -32,22 +31,18 @@ def serve() -> None:
     )
 
 
-async def init_root(name: str, admin: str, mediator_url: str) -> int:
+async def init_root(name: str, admin: str) -> int:
     try:
         async with get_sessionmaker()() as db:
-            tenant, mediator = await create_root(db, name, admin, mediator_url)
+            tenant = await create_root(db, name, admin)
     except RootExists:
         print("init-root: there is a root tenant already", file=sys.stderr)
         return 1
-    except MediatorError as error:
-        print(f"init-root: --mediator-url: {error.code}", file=sys.stderr)
-        return 2
     finally:
         await get_engine().dispose()
-    print(f"Root tenant {tenant.id} ({name}) and its mediator {mediator.name}")
-    print(f"at {mediator.url}: their DIDs are pending signature.")
+    print(f"Root tenant {tenant.id} ({name}): its DID is pending signature.")
     print(f"{admin} runs it once they sign in to the portal with that address; an admin")
-    print("with a linked Almena wallet signs the identities, and then they resolve.")
+    print("with a linked Almena wallet signs its identity, and then it resolves.")
     return 0
 
 
@@ -57,14 +52,9 @@ def main() -> None:
     root = commands.add_parser("init-root", help="create the root tenant (the trust anchor), once")
     root.add_argument("--admin", required=True, help="email of its first admin")
     root.add_argument("--name", default=ANCHOR_NAME, help=f"its name (default: {ANCHOR_NAME})")
-    root.add_argument(
-        "--mediator-url",
-        default=ROOT_MEDIATOR_URL,
-        help=f"where its mediator listens (default: {ROOT_MEDIATOR_URL})",
-    )
     args = parser.parse_args()
     if args.command == "init-root":
-        sys.exit(asyncio.run(init_root(args.name, args.admin, args.mediator_url)))
+        sys.exit(asyncio.run(init_root(args.name, args.admin)))
     serve()
 
 

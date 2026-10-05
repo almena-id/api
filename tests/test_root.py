@@ -3,11 +3,10 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api.config import get_settings
-from registry_api.mediators import MediatorError
 from registry_api.models import Identity
 from registry_api.root import RootExists, create_root
 from tests.conftest import Outbox
-from tests.signing import publish, ready, sign
+from tests.signing import ready
 from tests.test_directory import _sign_in
 
 pytestmark = pytest.mark.no_anchor
@@ -27,7 +26,7 @@ async def test_the_root_is_created_once(db: AsyncSession) -> None:
 async def test_its_invited_admin_joins_it(
     client: AsyncClient, outbox: Outbox, db: AsyncSession
 ) -> None:
-    root, _ = await create_root(db, "Almena", "Root@Almena.id")
+    root = await create_root(db, "Almena", "Root@Almena.id")
     headers, tenant = await _sign_in(client, outbox, "root@almena.id")
     assert tenant == str(root.id)
     assert len((await client.get("/api/v1/tenants", headers=headers)).json()) == 1
@@ -38,7 +37,7 @@ async def test_its_identity_is_the_domain_did(
 ) -> None:
     assert (await client.get("/.well-known/did.json")).status_code == 404
 
-    root, _ = await create_root(db, "Almena", "root@almena.id")
+    root = await create_root(db, "Almena", "root@almena.id")
     # Pending until one of its admins signs it from a wallet.
     assert (await client.get("/.well-known/did.json")).status_code == 404
     headers, _ = await _sign_in(client, outbox, "root@almena.id")
@@ -80,26 +79,12 @@ async def test_its_identity_is_the_domain_did(
     assert (await client.get(f"/ids/{slug}/did.json")).status_code == 404
 
 
-async def test_it_comes_with_its_mediator(
+async def test_it_comes_with_no_mediator(
     client: AsyncClient, outbox: Outbox, db: AsyncSession
 ) -> None:
-    root, mediator = await create_root(db, "Almena", "root@almena.id")
-    assert mediator.url == "https://mediator.almena.id"
+    root = await create_root(db, "Almena", "root@almena.id")
     headers, _ = await _sign_in(client, outbox, "root@almena.id")
     listed = (await client.get(f"/api/v1/tenants/{root.id}/mediators", headers=headers)).json()
-    assert [(m["name"], m["url"]) for m in listed["items"]] == [
-        ("Almena Mediator", "https://mediator.almena.id")
-    ]
-    # Signed and endorsed like any other: its DID resolves and names where it listens.
-    wallet = await ready(client, headers, str(root.id))
-    await sign(client, headers, str(root.id), str(mediator.identity_id), wallet)
-    await publish(client, headers, str(root.id), "mediators", str(mediator.id), wallet)
-    document = (await client.get(f"/ids/{mediator.identity.slug}/did.json")).json()
-    assert document["service"][0]["serviceEndpoint"]["uri"] == "https://mediator.almena.id"
-    root_did = (await db.get(Identity, root.identity_id)).did  # type: ignore[union-attr]
-    assert document["controller"] == root_did
-
-
-async def test_its_mediator_url_is_checked(db: AsyncSession) -> None:
-    with pytest.raises(MediatorError):
-        await create_root(db, "Almena", "root@almena.id", "http://mediator.almena.id")
+    assert listed["items"] == []
+    tenant = (await client.get(f"/api/v1/tenants/{root.id}", headers=headers)).json()
+    assert tenant["mediator"] is None

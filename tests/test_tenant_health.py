@@ -147,20 +147,20 @@ async def test_a_public_mediator_is_offered_to_every_tenant(
 
 @pytest.mark.no_anchor
 async def test_new_tenants_start_with_the_roots_mediator(
-    client: AsyncClient, outbox: Outbox, db: AsyncSession
+    client: AsyncClient, outbox: Outbox, db: AsyncSession, dns: Dns
 ) -> None:
-    root, mediator = await create_root(db, "Almena", "root@almena.id")
-    assert mediator.public
+    root = str((await create_root(db, "Almena", "root@almena.id")).id)
+    headers, _ = await _sign_in(client, outbox, "root@almena.id")
+    mediator = await new_mediator(client, headers, root, dns, subdomain="relay", public=True)
     # A draft is nobody's default.
     _, early = await _sign_in(client, outbox, "early@example.org")
-    headers, _ = await _sign_in(client, outbox, "root@almena.id")
-    wallet = await ready(client, headers, str(root.id))
-    await sign(client, headers, str(root.id), str(mediator.identity_id), wallet)
-    await publish(client, headers, str(root.id), "mediators", str(mediator.id), wallet)
+    wallet = await ready(client, headers, root)
+    await sign(client, headers, root, mediator["identity"]["id"], wallet)
+    await publish(client, headers, root, "mediators", mediator["id"], wallet)
 
     ada, tenant = await _sign_in(client, outbox, "ada@example.org")
     body = (await client.get(f"/api/v1/tenants/{tenant}", headers=ada)).json()
-    assert body["mediator"] == {"id": str(mediator.id), "name": "Almena Mediator", "own": False}
+    assert body["mediator"] == {"id": mediator["id"], "name": "Relay", "own": False}
     assert _issues(await _health(client, ada, tenant))["mediator"] is None
     early_headers, _ = await _sign_in(client, outbox, "early@example.org")
     assert (await client.get(f"/api/v1/tenants/{early}", headers=early_headers)).json()[

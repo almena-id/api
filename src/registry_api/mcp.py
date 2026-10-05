@@ -85,7 +85,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool("list_identities", "GET", f"{T}/identities"),
     Tool("get_identity", "GET", f"{T}/identities/{{identity_id}}"),
     Tool("create_identity", "POST", f"{T}/identities"),
-    Tool("list_waiting_signatures", "GET", f"{T}/signatures"),
+    Tool("list_pending", "GET", f"{T}/pending"),
     Tool("sign_identity", "POST", f"{T}/identities/{{identity_id}}/sign"),
     Tool("get_signing", "GET", f"{T}/{{kind}}/{{item_id}}/signing"),
     Tool("set_signing", "PUT", f"{T}/{{kind}}/{{item_id}}/signing"),

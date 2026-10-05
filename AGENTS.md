@@ -21,8 +21,9 @@ src/registry_api/
   mediators.py       checking the address a mediator listens on (nothing is fetched)
   dns_proof.py       proving a domain with a DNS TXT record (`_almena.{domain}`)
   root.py            the root tenant (Almena Trust Anchor): created once, with Almena's
-                     catalogue; its identity is the domain's DID (did:web:almena.id); its
-                     public mediator is every new tenant's default (`default_mediator`)
+                     catalogue and no mediator; its identity is the domain's DID
+                     (did:web:almena.id); the public mediator its admins add and publish is
+                     every new tenant's default (`default_mediator`)
   trust_anchor.py    the trust anchor (the root) and its catalogue, everyone's: `load` reads
                      it from the database (the anchor's fields, domains, categories, credential
                      types, plus a tenant's own fields as `custom:{key}`), `seed` gives the
@@ -106,6 +107,8 @@ src/registry_api/
                      `client` names who asks, and so the token's audience), and
                      the tenant's signers signing an identity's next log entry (`purpose: sign`)
                      directory.py: a tenant's issuers, verifiers, mediators, identities;
+                     pending.py: what waits in a tenant to be signed or published, in
+                     the order it is done, what blocks each and whether it is the asker's;
                      publication.py: publishing them (the tenant's signers; unpublishing, admins) and the public catalogue;
                      signing.py: an issuer's or verifier's signing system (admins set it)
                      queues.py: an issuer's or verifier's queue at the broker (admins make,

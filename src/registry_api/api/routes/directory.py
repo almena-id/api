@@ -634,31 +634,6 @@ async def list_identities(
     return await _page(db, Identity, tenant_id, limit, cursor)
 
 
-class Waiting(BaseModel):
-    id: uuid.UUID
-    name: str
-    signature: dids.Status
-
-
-@router.get(
-    "/signatures",
-    summary="The tenant's identities whose DID waits for a signature (pending or outdated)",
-)
-async def waiting_signatures(tenant_id: TenantId, db: DbSession) -> list[Waiting]:
-    did_url = get_settings().did_url
-    identities = await db.scalars(
-        select(Identity)
-        .where(Identity.tenant_id == tenant_id)
-        .order_by(Identity.created_at, Identity.id)
-    )
-    waiting = []
-    for identity in identities:
-        state = await dids.status_of(db, did_url, identity)
-        if state != "signed":
-            waiting.append(Waiting(id=identity.id, name=identity.name, signature=state))
-    return waiting
-
-
 @router.get("/identities/{identity_id}", summary="One identity, with its DID document")
 async def get_identity(
     tenant_id: TenantId, identity_id: uuid.UUID, db: DbSession
