@@ -5,6 +5,7 @@ from httpx import AsyncClient, Response
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from registry_api import housekeeping
 from registry_api.config import get_settings
 from registry_api.mail import Locale, Mailer, get_mailer
 from registry_api.main import app
@@ -59,7 +60,10 @@ async def test_a_code_works_once(client: AsyncClient, outbox: Outbox) -> None:
     assert response.json()["detail"] == "invalid_code"
 
 
-async def test_a_new_code_replaces_the_old_one(client: AsyncClient, outbox: Outbox) -> None:
+async def test_a_new_code_replaces_the_old_one(
+    client: AsyncClient, outbox: Outbox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "login_code_resend_seconds", 0)
     await _ask(client)
     old = outbox.last_code()
     await _ask(client)
@@ -143,13 +147,14 @@ async def test_a_session_ends_after_its_lifetime_however_used(
     assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 401
 
 
-async def test_signing_in_sweeps_ended_sessions(
+async def test_ended_sessions_are_swept(
     client: AsyncClient, outbox: Outbox, db: AsyncSession
 ) -> None:
     await _signed_in(client, outbox)
     await db.execute(update(Session).values(expires_at=datetime.now(UTC) - timedelta(minutes=1)))
     await db.commit()
     await _signed_in(client, outbox)
+    await housekeeping.sweep(db)
     db.expire_all()
     assert len(list(await db.scalars(select(Session)))) == 1
 

@@ -57,13 +57,14 @@ class Tool:
 
 TOOLS: tuple[Tool, ...] = (
     # The account and its tenants.
-    Tool("get_account", "GET", "/api/v1/auth/me"),
+    Tool("get_me", "GET", "/api/v1/auth/me"),
     Tool("list_tenants", "GET", "/api/v1/tenants"),
     Tool("get_tenant", "GET", T),
     Tool("update_tenant", "PATCH", T),
     Tool("get_tenant_health", "GET", f"{T}/health"),
     Tool("list_members", "GET", f"{T}/members"),
     Tool("invite_member", "POST", f"{T}/invitations"),
+    Tool("change_member_role", "PATCH", f"{T}/members/{{user_id}}"),
     # Domains.
     Tool("list_domains", "GET", f"{T}/domains"),
     Tool("add_domain", "POST", f"{T}/domains"),
@@ -85,6 +86,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool("list_identities", "GET", f"{T}/identities"),
     Tool("get_identity", "GET", f"{T}/identities/{{identity_id}}"),
     Tool("create_identity", "POST", f"{T}/identities"),
+    Tool("rename_identity", "PATCH", f"{T}/identities/{{identity_id}}"),
     Tool("list_pending", "GET", f"{T}/pending"),
     Tool("sign_identity", "POST", f"{T}/identities/{{identity_id}}/sign"),
     Tool("get_signing", "GET", f"{T}/{{kind}}/{{item_id}}/signing"),
@@ -121,6 +123,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool("list_forms", "GET", f"{T}/forms"),
     Tool("get_form", "GET", f"{T}/forms/{{form_id}}"),
     Tool("create_form", "POST", f"{T}/forms"),
+    Tool("update_form", "PUT", f"{T}/forms/{{form_id}}"),
     Tool("get_form_schema", "GET", f"{T}/forms/{{form_id}}/schema"),
     Tool("get_form_dcql", "GET", f"{T}/forms/{{form_id}}/dcql"),
     Tool("verify_presentations", "POST", f"{T}/forms/{{form_id}}/verify"),

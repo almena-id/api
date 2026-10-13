@@ -1,13 +1,14 @@
 """FastAPI application."""
 
+import asyncio
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from scalar_fastapi import add_scalar_reference
 
-from registry_api import __version__
+from registry_api import __version__, errors, housekeeping
 from registry_api.api.router import api_router
 from registry_api.api.routes import (
     did_documents,
@@ -20,14 +21,18 @@ from registry_api.api.routes import (
 )
 from registry_api.broker import close_broker
 from registry_api.config import get_settings
-from registry_api.db import get_engine
+from registry_api.db import get_engine, get_sessionmaker
 from registry_api.logs import REQUEST_ID_HEADER, RequestContextMiddleware, configure_logging
 from registry_api.vault import close_vault
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    sweeping = asyncio.create_task(housekeeping.run(get_sessionmaker()))
     yield
+    sweeping.cancel()
+    with suppress(asyncio.CancelledError):
+        await sweeping
     await get_engine().dispose()
     await close_vault()
     await close_broker()
@@ -49,6 +54,7 @@ def create_app() -> FastAPI:
             {"url": "/", "description": "This server"},
         ],
     )
+    app.add_exception_handler(errors.Refusal, errors.handle)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

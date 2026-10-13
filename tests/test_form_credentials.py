@@ -2,7 +2,7 @@ from typing import Any
 
 from httpx import AsyncClient
 
-from tests.conftest import Outbox
+from tests.conftest import Outbox, bilingual
 from tests.signing import publish, ready, sign
 from tests.test_directory import _sign_in
 
@@ -29,6 +29,7 @@ async def test_a_form_asks_for_credentials_that_fill_its_fields(
 ) -> None:
     university = await _published_issuer(client, outbox, "uni@example.edu", ["academic_degree"])
     headers, tenant = await _sign_in(client, outbox, "ada@acme.com")
+    await bilingual(client, headers, tenant)
     base = f"/api/v1/tenants/{tenant}/forms"
     response = await client.post(
         base,
@@ -139,7 +140,7 @@ async def test_a_credential_request_must_hold(client: AsyncClient, outbox: Outbo
         json={"name": {"en": "X"}, "credentials": [{"type": "pid"}, {"type": "passport"}]},
         headers=headers,
     )
-    assert which.json()["detail"] == {"code": "credential_unknown", "credential": 1}
+    assert which.json() == {"detail": "credential_unknown", "credential": 1}
     assert await refused([{"type": "pid", "claims": ["member_number"]}]) == (
         "credential_claims_invalid"
     )

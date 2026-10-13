@@ -1,9 +1,13 @@
 """Proving a domain with DNS: a TXT record the owner publishes.
 
 A tenant links a domain (`api/routes/domains.py`) and gets the record that
-proves it: ``_almena.{domain}`` saying ``almena-verify={token}``. The token is
-the same every time the tenant links that domain, so a record published once
-keeps proving it after the domain is removed and linked again. The record
+proves it: ``_almena-{tenant-slug}.{domain}`` saying ``almena-verify={token}``
+— a name of its own, so several tenants prove the same domain each with its
+own record.
+The token is the same every time the tenant links that domain, so a record
+published once keeps proving it after the domain is removed and linked again;
+it also keeps a wildcard record from proving it for anyone. A record at the
+bare ``_almena.{domain}``, as first published, still proves it. The record
 is looked up at public resolvers (``REGISTRY_DNS_RESOLVERS``), each asked on
 its own, so that one still caching its absence does not hide it.
 """
@@ -59,9 +63,14 @@ def new_token(tenant_id: uuid.UUID, domain: str) -> str:
     return base64.urlsafe_b64encode(digest[:24]).decode()
 
 
-def dns_record(domain: str, token: str) -> tuple[str, str]:
-    """The TXT record that proves control of `domain`: its name and its value."""
-    return f"{DNS_LABEL}.{domain}", f"{DNS_PREFIX}{token}"
+def dns_record(domain: str, token: str, tenant_slug: str) -> tuple[str, str]:
+    """The TXT record that proves the tenant controls `domain`: its name and its value."""
+    return f"{DNS_LABEL}-{tenant_slug}.{domain}", f"{DNS_PREFIX}{token}"
+
+
+def legacy_name(domain: str) -> str:
+    """Where the record was first published, shared by every tenant: still looked at."""
+    return f"{DNS_LABEL}.{domain}"
 
 
 TxtLookup = Callable[[str], Awaitable[list[str]]]

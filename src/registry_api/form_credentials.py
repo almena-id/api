@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import credential_catalog as catalog
 from registry_api import texts
+from registry_api.errors import Refusal
 from registry_api.models import Identity, Issuer
 
 KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -62,9 +63,7 @@ class CredentialRequest(BaseModel):
 
 def _refuse(code: str, index: int) -> HTTPException:
     """A refusal about a credential request: which (its index in the list)."""
-    return HTTPException(
-        status.HTTP_422_UNPROCESSABLE_CONTENT, detail={"code": code, "credential": index}
-    )
+    return Refusal(status.HTTP_422_UNPROCESSABLE_CONTENT, code, credential=index)
 
 
 async def published_issuers(db: AsyncSession, type_id: str, tenant_id: uuid.UUID) -> set[str]:

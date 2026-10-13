@@ -164,4 +164,4 @@ async def test_what_a_tenant_makes_is_its_own(client: AsyncClient, outbox: Outbo
         json={"name": {"en": "x"}, "fields": [{"ref": "custom:locker"}], "credentials": []},
         headers=bob,
     )
-    assert form.status_code == 422 and form.json()["detail"]["code"] == "field_unknown"
+    assert form.status_code == 422 and form.json()["detail"] == "field_unknown"

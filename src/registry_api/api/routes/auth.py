@@ -30,13 +30,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import logs, oauth
+from registry_api import logs, oauth, throttle
 from registry_api.config import get_settings
 from registry_api.db import get_session
 from registry_api.mail import Locale, Mailer, get_mailer
@@ -192,20 +192,51 @@ OptionalSession = Annotated[Session | None, Depends(optional_session)]
     "/code",
     status_code=status.HTTP_202_ACCEPTED,
     summary="Email a sign-in code (replaces any earlier one)",
-    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "`mail_unavailable`"}},
+    responses={
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": "`too_many_codes`: too soon after the last one, or too many "
+            "for the address; `too_many_attempts`: the address is locked by wrong codes; "
+            "`too_many_requests`: too many from the network address (`Retry-After`)"
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "`mail_unavailable`"},
+    },
 )
 async def send_code(
-    body: CodeRequest, db: DbSession, mailer: Annotated[Mailer, Depends(get_mailer)]
+    body: CodeRequest,
+    request: Request,
+    db: DbSession,
+    mailer: Annotated[Mailer, Depends(get_mailer)],
 ) -> None:
     email = body.email.lower()
-    code = new_code()
     settings = get_settings()
+    now = datetime.now(UTC)
+    # A new code does not lift a lock: the wrong ones are counted per address.
+    await throttle.check(db, "too_many_attempts", *_failures(email))
+    await throttle.check(db, "too_many_requests", _ip_failures(request))
+    last = await db.scalar(select(LoginCode.created_at).where(LoginCode.email == email))
+    resend = timedelta(seconds=settings.login_code_resend_seconds)
+    if last is not None and as_utc(last) + resend > now:
+        raise throttle.refusal("too_many_codes", as_utc(last) + resend - now)
+    # The network address first: one sending to many addresses is stopped
+    # before it spends theirs.
+    await throttle.hit(
+        db,
+        "too_many_requests",
+        throttle.per_ip("codes", request, settings.ip_login_codes_per_hour),
+    )
+    await throttle.hit(
+        db,
+        "too_many_codes",
+        throttle.Limit(f"codes:{email}", settings.login_codes_per_hour, throttle.HOUR),
+    )
+    code = new_code()
     await db.execute(delete(LoginCode).where(LoginCode.email == email))
     db.add(
         LoginCode(
             email=email,
             code_hash=_code_hash(email, code),
-            expires_at=datetime.now(UTC) + timedelta(minutes=settings.login_code_ttl_minutes),
+            created_at=now,
+            expires_at=now + timedelta(minutes=settings.login_code_ttl_minutes),
         )
     )
     await db.commit()
@@ -222,18 +253,42 @@ async def send_code(
     summary="Exchange an emailed code for a session (creates the account the first time)",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"description": "`invalid_code`: wrong or expired"},
-        status.HTTP_429_TOO_MANY_REQUESTS: {"description": "`too_many_attempts`: ask again"},
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": "`too_many_attempts`: this code, or the address for a while "
+            "(`Retry-After`); `too_many_requests`: the network address"
+        },
     },
 )
-async def verify_code(body: CodeCheck, db: DbSession) -> SignedIn:
+async def verify_code(body: CodeCheck, request: Request, db: DbSession) -> SignedIn:
     email = body.email.lower()
-    await check_code(db, email, body.code)
+    await check_code(db, request, email, body.code)
     return await sign_in(db, await _user_for_email(db, email, body.locale))
 
 
-async def check_code(db: AsyncSession, email: str, code: str) -> None:
-    """Spend the code emailed to `email`, or refuse (`invalid_code`, `too_many_attempts`)."""
+def _failures(email: str) -> tuple[throttle.Limit, throttle.Limit]:
+    """Wrong codes for `email`, whichever codes they were for: the lock and the day's."""
     settings = get_settings()
+    return (
+        throttle.Limit(
+            f"failures:{email}",
+            settings.login_lock_failures,
+            timedelta(minutes=settings.login_lock_minutes),
+        ),
+        throttle.Limit(f"failures-day:{email}", settings.login_failures_per_day, throttle.DAY),
+    )
+
+
+def _ip_failures(request: Request) -> throttle.Limit:
+    return throttle.per_ip("failures", request, get_settings().ip_login_failures_per_hour)
+
+
+async def check_code(db: AsyncSession, request: Request, email: str, code: str) -> None:
+    """Spend the code emailed to `email`, or refuse (`invalid_code`; 429
+    `too_many_attempts` for this code or the address, `too_many_requests` for
+    the network address)."""
+    settings = get_settings()
+    await throttle.check(db, "too_many_attempts", *_failures(email))
+    await throttle.check(db, "too_many_requests", _ip_failures(request))
     login_code = await db.scalar(select(LoginCode).where(LoginCode.email == email))
     if login_code is None or as_utc(login_code.expires_at) <= datetime.now(UTC):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="invalid_code")
@@ -241,6 +296,7 @@ async def check_code(db: AsyncSession, email: str, code: str) -> None:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, detail="too_many_attempts")
     if not hmac.compare_digest(login_code.code_hash, _code_hash(email, code)):
         login_code.attempts += 1
+        await throttle.count(db, *_failures(email), _ip_failures(request))
         await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="invalid_code")
     # A code is good once.
@@ -281,6 +337,21 @@ def default_tenant_name(email: str, locale: Locale) -> str:
     return _TENANT_NAME[locale].format(email=email)[:200]
 
 
+_UNNAMED: dict[Locale, str] = {"en": "Unnamed tenant", "es": "Tenant sin nombre"}
+
+
+async def own_tenant(db: AsyncSession, user: User, locale: Locale) -> Tenant:
+    """A tenant of the user's own, run by them: what an account starts with,
+    and what it is given when it is left with none."""
+    if user.email:
+        tenant = await new_tenant(db, default_tenant_name(user.email, locale), languages=[locale])
+    else:
+        tenant = await new_tenant(db, None, _UNNAMED[locale], languages=[locale])
+    db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="admin"))
+    await db.flush()
+    return tenant
+
+
 async def _user_for_email(db: AsyncSession, email: str, locale: Locale = "en") -> User:
     """The account for an address the caller has verified, created if new."""
     user = await db.scalar(select(User).where(User.email == email))
@@ -294,8 +365,7 @@ async def _user_for_email(db: AsyncSession, email: str, locale: Locale = "en") -
             # A new account starts with a tenant of its own, named after it and
             # run by it, so there is always one to work in — unless somebody
             # already asked it into theirs: then that is the one it works in.
-            tenant = await new_tenant(db, default_tenant_name(email, locale), languages=[locale])
-            db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="admin"))
+            await own_tenant(db, user, locale)
         await db.flush()
         await db.refresh(user)
     return user
@@ -320,13 +390,6 @@ async def accept_invitations(db: AsyncSession, user: User) -> None:
 async def sign_in(db: AsyncSession, user: User) -> SignedIn:
     await accept_invitations(db, user)
     now = datetime.now(UTC)
-    # Ended sessions are swept here, not by a job: signing in is frequent enough.
-    await db.execute(
-        delete(Session).where(
-            (Session.expires_at <= now)
-            | (Session.name.is_(None) & (Session.last_seen_at <= now - _idle()))
-        )
-    )
     token = new_token()
     expires_at = now + timedelta(hours=get_settings().session_ttl_hours)
     db.add(

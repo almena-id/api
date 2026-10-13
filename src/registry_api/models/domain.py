@@ -11,8 +11,9 @@ from registry_api.models.base import Base, TimestampMixin
 
 class TenantDomain(TimestampMixin, Base):
     """A domain the tenant says is its own; verified once the TXT record at
-    `_almena.{domain}` says `almena-verify={dns_token}`. Verified ones are
-    named in the tenant's DID document (`LinkedDomains`)."""
+    `_almena-{tenant-slug}.{domain}` (or, as first published, `_almena.{domain}`)
+    says `almena-verify={dns_token}`. Several tenants may link the same domain.
+    Verified ones are named in the tenant's DID document (`LinkedDomains`)."""
 
     __tablename__ = "tenant_domains"
     __table_args__ = (UniqueConstraint("tenant_id", "domain"),)

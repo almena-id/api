@@ -74,3 +74,15 @@ async def test_docs_are_served_by_scalar(client: AsyncClient) -> None:
     assert response.status_code == 200
     assert "@scalar/api-reference" in response.text
     assert "/openapi.json" in response.text
+
+
+def test_production_refuses_the_development_password() -> None:
+    import pytest
+    from pydantic import SecretStr, ValidationError
+
+    from registry_api.config import Settings
+
+    with pytest.raises(ValidationError, match="REGISTRY_DB_PASSWORD"):
+        Settings(environment="production", db_password=SecretStr("registry"))
+    assert Settings(environment="production", db_password=SecretStr("s3cret")).docs_enabled is False
+    assert Settings(environment="development").docs_enabled is True

@@ -27,9 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_api import answers as checks
 from registry_api import credential_catalog, issuance, presentations, status_lists, trust_anchor
 from registry_api import field_catalog as catalog
-from registry_api.api.routes.applications import _received, content
+from registry_api.api.routes.applications import content
 from registry_api.api.routes.auth import CurrentSession, DbSession, as_utc
 from registry_api.api.routes.directory import TenantId
+from registry_api.api.routes.inbox import received
 from registry_api.api.routes.wallet import (
     LocaleIn,
     RequestOut,
@@ -37,6 +38,7 @@ from registry_api.api.routes.wallet import (
     my_keys,
     new_sign_request,
 )
+from registry_api.errors import Refusal
 from registry_api.models import Application, Issuer, StatusList, Tenant
 
 router = APIRouter(prefix="/tenants/{tenant_id}/applications", tags=["applications"])
@@ -65,7 +67,7 @@ async def status_list_for(db: AsyncSession, item: Application, issuer: Issuer) -
 async def _accepted(
     db: AsyncSession, tenant_id: uuid.UUID, application_id: uuid.UUID
 ) -> tuple[Application, Issuer]:
-    item = await _received(db, tenant_id, application_id)
+    item = await received(db, tenant_id, application_id)
     if item.status != "accepted":
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -134,7 +136,7 @@ class IssuanceIn(BaseModel):
         status.HTTP_403_FORBIDDEN: {"description": "`not_the_issuers_signer`"},
         status.HTTP_409_CONFLICT: {"description": "`not_accepted`, `already_issued`"},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": "`{code: claims_invalid, errors: {claim: problem}}`, "
+            "description": "`claims_invalid`, with `errors`: `{claim: problem}`; "
             "`valid_until_invalid` (not after today)"
         },
     },
@@ -169,10 +171,7 @@ async def save_draft(
         else:
             kept[name] = value
     if errors:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={"code": "claims_invalid", "errors": errors},
-        )
+        raise Refusal(status.HTTP_422_UNPROCESSABLE_CONTENT, "claims_invalid", errors=errors)
     item.issuance_claims = kept
     # The end of that day, in UTC.
     item.credential_valid_until = datetime.combine(body.valid_until, time.max, tzinfo=UTC)

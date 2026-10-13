@@ -146,3 +146,15 @@ async def test_the_transport(client: AsyncClient, outbox: Outbox) -> None:
     )
     assert garbled.status_code == 400
     assert garbled.json()["error"]["code"] == -32700
+
+
+def test_tool_names_are_unique() -> None:
+    names = [tool.name for tool in mcp.TOOLS]
+    assert len(names) == len(set(names))
+    assert len(mcp.BY_NAME) == len(mcp.TOOLS)
+
+
+async def test_get_me_is_the_caller(client: AsyncClient, outbox: Outbox) -> None:
+    ada = await _sign_in(client, outbox, "ada@example.org")
+    result = await _call(client, ada, "get_me", {})
+    assert "ada@example.org" in json.dumps(result)

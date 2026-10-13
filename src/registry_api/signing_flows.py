@@ -3,8 +3,8 @@
 What a tenant signs as itself — the did:webvh log entries of its identities,
 and its endorsements of the issuers, verifiers and mediators it publishes — is
 signed by people, from their wallets; the tenant's signing flow says which
-people. The registry works out from it the keys that may sign (the log's
-`updateKeys`, and the keys its own identity lists), and signs nothing itself.
+people, or that nobody does. The registry works out from it the keys that may
+sign (the log's `updateKeys`, and the keys its own identity lists).
 
 The catalogue so far:
 
@@ -13,9 +13,14 @@ The catalogue so far:
 - ``single_user``: one member of the tenant, named in ``Tenant.signer_id``,
   signs alone — admin or not: signing and managing the account are apart.
   A signer who left the tenant signs nothing.
+- ``none``: nobody signs: the platform does, with a key of the tenant's it
+  keeps in the vault (``custody``), as soon as there is something to sign;
+  publishing is still an admin's decision. The tenant works with no wallet,
+  and trusts the platform with its signature.
 
 Changing the flow changes the log's ``updateKeys``, and that entry is signed
-by the keys in force: the old flow's signers hand over to the new one's.
+by the keys in force: the old flow's signers hand over to the new one's — from
+their wallets to ``none``, by the platform from ``none``.
 
 Flows that need more than one signature (several admins, named people) will
 collect approvals here before anything is published: did:webvh has no
@@ -34,8 +39,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_api import webvh
 from registry_api.models import Tenant, TenantMember, UserIdentity
 
-Flow = Literal["any_admin", "single_user"]
-FLOWS: tuple[Flow, ...] = ("any_admin", "single_user")
+Flow = Literal["any_admin", "single_user", "none"]
+FLOWS: tuple[Flow, ...] = ("any_admin", "single_user", "none")
 DEFAULT: Flow = "any_admin"
 
 
@@ -65,12 +70,13 @@ async def _members_wallets(db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid
 
 async def signs(db: AsyncSession, tenant: Tenant, user_id: uuid.UUID) -> bool:
     """Whether the user signs as the tenant under its flow, wallet or not:
-    what the portal offers them (signing, publishing) depends on it."""
+    what the portal offers them (signing, publishing) depends on it. Under
+    `none` the platform signs, when an admin asks."""
     member = await db.get(TenantMember, (tenant.id, user_id))
     if member is None:
         return False
     match tenant.signing_flow:
-        case "any_admin":
+        case "any_admin" | "none":
             return member.role == "admin"
         case "single_user":
             return tenant.signer_id == user_id
@@ -88,6 +94,8 @@ async def signers(db: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
             if tenant.signer_id is None:
                 return []
             return await _members_wallets(db, tenant_id, tenant.signer_id)
+        case "none":
+            return [tenant.platform_key] if tenant.platform_key else []
         case _:
             # A flow this build does not know signs nothing.
             return []

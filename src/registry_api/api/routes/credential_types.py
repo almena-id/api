@@ -33,7 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import credential_catalog as credentials
-from registry_api import entitlements, trust_anchor
+from registry_api import entitlements, texts, trust_anchor
 from registry_api import field_catalog as catalog
 from registry_api.api.routes.auth import DbSession
 from registry_api.api.routes.directory import TenantId
@@ -253,6 +253,7 @@ async def create_type(
     if not KEY.match(body.key):
         raise _refuse("key_invalid")
     values = _checked(body, owner)
+    await texts.enabled_only(db, tenant_id, body.labels, body.descriptions)
     if owner.ref(body.key) in owner.found.types:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="key_exists")
     item = CatalogType(
@@ -343,6 +344,9 @@ async def update_type(
         # A field sent as `null` that a type cannot be without.
         raise RequestValidationError(error.errors()) from None
     values = _checked(whole, owner)
+    # Only what is sent: what it was named before in a language the tenant no
+    # longer works in stays until it is named again.
+    await texts.enabled_only(db, tenant_id, body.labels, body.descriptions)
     changed = any(values[name] != current[name] for name in NAMING)
     if (changed or not _kept_claims(item.claims, values["claims"])) and await _in_use(
         db, item, owner

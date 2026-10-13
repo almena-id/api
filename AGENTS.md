@@ -15,11 +15,24 @@ src/registry_api/
   logs.py            log format (JSON or text), each request's context (request id, user,
                      tenant: `set_user`, `set_tenant`), redaction and the access record
   security.py        sign-in codes and session tokens (both stored as SHA-256)
+  errors.py          `Refusal`: every error is `{"detail": "<code>"}`, what more says why
+                     beside it (`field`, `credential`, `errors`); never an object in `detail`
+  paging.py          keyset paging, newest first: `Limit`, `Cursor`, `encode`/`decode`, `after`
+  housekeeping.py    sweeping what has run out, every `REGISTRY_HOUSEKEEPING_MINUTES` (the
+                     app's lifespan runs it); the one place that deletes expired rows
+  memo.py            what a request reads more than once (the catalogue, who acts as an
+                     identity, signers' keys), kept in the session until it writes
+  throttle.py        limits on what callers do, counted in `throttles` rows per key and
+                     window: sign-in codes and wrong codes per address, and per network
+                     address (`client_ip`: the visitor a portal names with the shared
+                     `REGISTRY_PORTAL_SECRET`) codes, applications, wallet sign-ins;
+                     refusals are 429 with `Retry-After`
   mail.py            SMTP mailer (`get_mailer` dependency) and the email texts, en/es: plain
                      text plus HTML, framed by `assets/mail.html` + `mail.css` (light, dark
                      by `prefers-color-scheme`/`[data-ogsc]`), the green mark inline (cid)
   mediators.py       checking the address a mediator listens on (nothing is fetched)
-  dns_proof.py       proving a domain with a DNS TXT record (`_almena.{domain}`)
+  dns_proof.py       proving a domain with a DNS TXT record (`_almena-{tenant-slug}.{domain}`;
+                     the bare `_almena.{domain}` first used still counts)
   root.py            the root tenant (Almena Trust Anchor): created once, with Almena's
                      catalogue and no mediator; its identity is the domain's DID
                      (did:web:almena.id); the public mediator its admins add and publish is
@@ -36,7 +49,12 @@ src/registry_api/
                      each should publish (built in phases: it names only what exists
                      already), its signed log, the next entry to sign, its status
   credentials.py     a tenant's membership credential for its issuers, verifiers, mediators
-  signing_flows.py   the signing engine: who signs as a tenant, by its flow (`any_admin`, `single_user`)
+  signing_flows.py   the signing engine: who signs as a tenant, by its flow (`any_admin`,
+                     `single_user`, `none`: nobody, the platform does)
+  custody.py         the platform signing as a tenant under `none`: its Ed25519 key in the vault
+                     (`tenants/{id}/signing`, public half `Tenant.platform_key`), proofs made as
+                     a wallet makes them, and `settle`, which signs every log entry it may — the
+                     routes that change what an identity publishes call it after they commit
   credential_catalog.py  what a credential type is (the types are the anchor's data): claims
                      named as catalogue fields, how each format names them (vct, W3C type,
                      mdoc doctype), their claims' JSON Schema and SD-JWT VC Type Metadata
@@ -45,8 +63,12 @@ src/registry_api/
                      presented, their claims, whom they are trusted from, the fields they
                      fill, and the OpenID4VP DCQL query they make
   texts.py           texts by language (`{"en": …, "es": …}`): a form's name, description,
-                     help and purposes; `clean` checks them, `text_of` picks one
+                     help and purposes; `clean` checks them, `text_of` picks one,
+                     `enabled_only` refuses what a tenant writes in a language it does not
+                     work in (`language_not_enabled`), checked after everything else
   answers.py         checking a holder's typed answers against the form's fields
+  patterns.py        tenants' text patterns, run with a time limit (`regex`), so one that
+                     backtracks without end fails the answer instead of holding the server
   issuance.py        issuing an accepted application's credential: the SD-JWT VC its
                      signer's wallet signs (header, payload, disclosures) and the check
                      of that JWS
@@ -71,7 +93,8 @@ src/registry_api/
                      module implementing `Vault`; nothing outside vault/ names a provider
   tenant_health.py   a tenant's health: the checks it must pass to operate (name, mediator,
                      signing flow) and its score; new checks go here
-  webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked, never made)
+  webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked;
+                     made only by `custody`)
   wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token
   didcomm.py         DIDComm v2 as an issuer writes to a holder: did:peer:2, a mediator's
                      did:web document, JWE authcrypt/anoncrypt (X25519, A256CBC-HS512, byte
@@ -120,6 +143,7 @@ src/registry_api/
                      domains.py: the tenant's linked domains, proved by DNS TXT
                      forms.py: the tenant's forms — the same whoever puts them (an issuer's
                      offer, a verifier's) —, made of catalogue fields, and the JSON Schema of their answers;
+                     changed whole (`PUT`) and deleted; while `in_use` only taking more, never deleted;
                      custom_fields.py: the tenant's own fields, beside Almena's catalogue
                      (`custom:{key}` in forms, never published); the anchor's, Almena's
                      catalogue (by key, published, with category and source) — groups
@@ -153,11 +177,19 @@ src/registry_api/
                      /api/v1), the issuer's lists and their signing, and suspending,
                      reinstating or revoking a credential (`sign`, kind `status_list`);
                      applications.py: holders applying for an offer (no account: a
-                     secret), the wallet's pair/present/submit requests on the
-                     sign-in channel, and the issuer's inbox;
-                     fields.py: the field and credential catalogues, public (`/catalog/fields`, and
-                     `/schemas/fields/v1[/{id}.json]` outside /api/v1, on the identity domain)
-                     members.py: members and invitations (`admin_of` guards inviting);
+                     secret): start, answers, files and what they sign;
+                     application_wallet.py: the wallet's pair/present/submit/receive
+                     requests on the sign-in channel, and collecting from a notice;
+                     offers.py: the public offers (`/catalog/offers`, one by one);
+                     inbox.py: the issuer's inbox, a page at a time, and deciding;
+                     fields.py: the field and credential catalogues, public (`/catalog/fields`,
+                     `/catalog/credentials`; outside /api/v1, on the identity domain, their
+                     schemas `/schemas/fields/{version}[/{name}]` and
+                     `/schemas/credentials/{version}[/{name}]`, and SD-JWT VC Type Metadata
+                     at `/.well-known/vct/{path}`)
+                     members.py: members and invitations (`admin_of` guards inviting, roles,
+                     removing and taking invitations back; anyone leaves; a tenant keeps an
+                     admin and its signers; an account left with none gets `own_tenant`);
                      auth.py's `_sign_in` turns pending invitations into membership;
                      mcp.py: the MCP endpoint at `/mcp` (outside /api/v1; JSON-RPC, stateless)
   models/            SQLAlchemy models; import each one in models/__init__.py

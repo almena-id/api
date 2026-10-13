@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from registry_api.api.routes import (
     account,
     accounts,
+    application_wallet,
     applications,
     auth,
     categories,
@@ -14,9 +15,11 @@ from registry_api.api.routes import (
     domains,
     fields,
     forms,
+    inbox,
     issuance,
     issuer_credentials,
     members,
+    offers,
     pending,
     publication,
     queues,
@@ -46,8 +49,9 @@ api_router.include_router(categories.router)
 api_router.include_router(value_domains.router)
 api_router.include_router(issuer_credentials.router)
 api_router.include_router(applications.router)
-api_router.include_router(applications.offers)
-api_router.include_router(applications.inbox)
+api_router.include_router(application_wallet.router)
+api_router.include_router(offers.router)
+api_router.include_router(inbox.router)
 api_router.include_router(issuance.router)
 api_router.include_router(status_lists.router)
 api_router.include_router(status_lists.credentials)

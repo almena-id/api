@@ -16,6 +16,7 @@ from registry_api.models.status_list import StatusList
 from registry_api.models.subscription import STATUSES as SUBSCRIPTION_STATUSES
 from registry_api.models.subscription import Subscription, SubscriptionStatus
 from registry_api.models.tenant import ROLES, Role, Tenant, TenantInvitation, TenantMember
+from registry_api.models.throttle import Throttle
 from registry_api.models.user import User
 from registry_api.models.verification import Verification
 from registry_api.models.verifier import Verifier
@@ -48,6 +49,7 @@ __all__ = [
     "TenantDomain",
     "TenantInvitation",
     "TenantMember",
+    "Throttle",
     "User",
     "UserIdentity",
     "Verification",

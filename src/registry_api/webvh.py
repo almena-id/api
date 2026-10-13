@@ -8,9 +8,10 @@ changed in the method's settings (the first one names the method, the SCID and
 the ``updateKeys``), and ``proof`` a Data Integrity proof (``eddsa-jcs-2022``)
 by one of the update keys in force before it.
 
-The registry builds entries and never signs them: people sign them in their
-wallets (``api/routes/wallet.py``) and the registry checks the proof
-before it writes the entry to the log.
+The registry builds entries and checks the proofs on them before it writes
+them to the log: people sign them in their wallets (``api/routes/wallet.py``)
+or, for a tenant whose signing flow is ``none``, the platform does
+(``custody``).
 
 Hashes are multihash SHA-256 in base58btc (``Qm…``), over the JSON
 Canonicalization Scheme (RFC 8785) of the entry.

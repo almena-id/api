@@ -8,7 +8,8 @@ catalogue so far:
 - ``mediator``: it receives messages through a mediator, and that mediator is
   published (a draft's DID does not resolve: nothing routes through it).
 - ``signing_flow``: somebody can sign as it under its flow, with a wallet:
-  under ``single_user``, a signer who still belongs; under either, a linked wallet.
+  under ``single_user``, a signer who still belongs; under either, a linked
+  wallet. Under ``none``, the platform's key for it (``no_key`` until made).
 
 New checks are added here, in the order the portal lists them.
 """
@@ -22,7 +23,7 @@ from registry_api import signing_flows
 from registry_api.models import Mediator, Tenant, TenantMember
 
 Check = Literal["name", "mediator", "signing_flow"]
-Issue = Literal["missing", "unpublished", "no_signer", "no_wallet"]
+Issue = Literal["missing", "unpublished", "no_signer", "no_wallet", "no_key"]
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,8 @@ async def _signing_flow(db: AsyncSession, tenant: Tenant) -> Issue | None:
         or await db.get(TenantMember, (tenant.id, tenant.signer_id)) is None
     ):
         return "no_signer"
+    if tenant.signing_flow == "none":
+        return None if tenant.platform_key else "no_key"
     return None if await signing_flows.signers(db, tenant.id) else "no_wallet"
 
 

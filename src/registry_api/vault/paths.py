@@ -16,6 +16,11 @@ def tenant(tenant_id: uuid.UUID) -> str:
     return f"tenants/{tenant_id}"
 
 
+def tenant_secret(tenant_id: uuid.UUID, name: str) -> str:
+    """One of the tenant's own secrets (`signing`, say)."""
+    return check_path(f"{tenant(tenant_id)}/{name}")
+
+
 def entity_root(tenant_id: uuid.UUID, kind: Kind, entity_id: uuid.UUID) -> str:
     """Everything an issuer, verifier or mediator has in the vault hangs from here."""
     return check_path(f"{tenant(tenant_id)}/{kind}/{entity_id}")

@@ -55,13 +55,13 @@ public document, and no document routes messages through a draft mediator.
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import quote, urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import mediators, messaging_keys, signing_flows, webvh
+from registry_api import mediators, memo, signing_flows, webvh
 from registry_api.models import (
     DidLogEntry,
     Identity,
@@ -99,9 +99,40 @@ def base_url(did_url: str, slug: str, root: bool) -> str:
     return f"{base}/.well-known" if root else f"{base}/{PATH}/{slug}"
 
 
+Acting = Tenant | Issuer | Verifier | Mediator
+
+
+async def acting(db: AsyncSession, identity_id: uuid.UUID) -> Acting | None:
+    """The tenant, issuer, verifier or mediator acting as the identity (at most
+    one); none for one registered on its own. Kept for the request (`memo`)."""
+    key = ("acting", identity_id)
+    store = memo.kept(db)
+    if key not in store:
+        await prefetch_acting(db, [identity_id])
+    return cast(Acting | None, memo.kept(db).get(key))
+
+
+async def prefetch_acting(db: AsyncSession, identity_ids: list[uuid.UUID]) -> None:
+    """Who acts as each of many identities, in a query per kind, kept for
+    `acting` to answer from (a list page, row by row)."""
+    found: dict[uuid.UUID, Acting | None] = dict.fromkeys(identity_ids)
+    items: list[Acting] = [
+        *await db.scalars(select(Tenant).where(Tenant.identity_id.in_(identity_ids))),
+        *await db.scalars(select(Issuer).where(Issuer.identity_id.in_(identity_ids))),
+        *await db.scalars(select(Verifier).where(Verifier.identity_id.in_(identity_ids))),
+        *await db.scalars(select(Mediator).where(Mediator.identity_id.in_(identity_ids))),
+    ]
+    for item in items:
+        if item.identity_id is not None:
+            found[item.identity_id] = item
+    store = memo.kept(db)
+    for identity_id, actor in found.items():
+        store[("acting", identity_id)] = actor
+
+
 async def is_root_identity(db: AsyncSession, identity_id: uuid.UUID) -> bool:
-    found = await db.scalar(select(Tenant.id).where(Tenant.root, Tenant.identity_id == identity_id))
-    return found is not None
+    item = await acting(db, identity_id)
+    return isinstance(item, Tenant) and item.root
 
 
 DID_CONTEXT = "https://www.w3.org/ns/did/v1"
@@ -184,25 +215,25 @@ def document(
 async def controller_for(db: AsyncSession, identity_id: uuid.UUID) -> str | None:
     """The DID of the tenant an issuer's, verifier's or mediator's identity
     belongs to; none for the tenant's own identity, or while it is pending."""
-    for model in (Issuer, Verifier, Mediator):
-        tenant_id = await db.scalar(select(model.tenant_id).where(model.identity_id == identity_id))
-        if tenant_id is not None:
-            tenant = await db.get(Tenant, tenant_id)
-            if tenant is None or tenant.identity_id is None:
-                return None
-            owner = await db.get(Identity, tenant.identity_id)
-            return None if owner is None else owner.did
-    return None
+    item = await acting(db, identity_id)
+    if item is None or isinstance(item, Tenant):
+        return None
+    # Got by key: once loaded in the request, the session answers it.
+    tenant = await db.get(Tenant, item.tenant_id)
+    if tenant is None or tenant.identity_id is None:
+        return None
+    owner = await db.get(Identity, tenant.identity_id)
+    return None if owner is None else owner.did
 
 
 async def linked_domains(db: AsyncSession, identity_id: uuid.UUID) -> list[str]:
     """The verified domains linked to the tenant whose own identity this is."""
-    tenant_id = await db.scalar(select(Tenant.id).where(Tenant.identity_id == identity_id))
-    if tenant_id is None:
+    item = await acting(db, identity_id)
+    if not isinstance(item, Tenant):
         return []
     linked = await db.scalars(
         select(TenantDomain.domain)
-        .where(TenantDomain.tenant_id == tenant_id, TenantDomain.verified_at.is_not(None))
+        .where(TenantDomain.tenant_id == item.id, TenantDomain.verified_at.is_not(None))
         .order_by(TenantDomain.created_at, TenantDomain.id)
     )
     return list(linked)
@@ -210,40 +241,39 @@ async def linked_domains(db: AsyncSession, identity_id: uuid.UUID) -> list[str]:
 
 async def endpoint_for(db: AsyncSession, identity_id: uuid.UUID) -> str | None:
     """Where the DIDComm messages of an identity go, from what acts as it."""
-    url = await db.scalar(select(Mediator.url).where(Mediator.identity_id == identity_id))
-    if url is not None:
-        return url
-    # The tenant, issuer or verifier acting as it: at most one of them.
-    for model in (Tenant, Issuer, Verifier):
-        mediator = await db.scalar(
-            select(Mediator)
-            .join(model, model.mediator_id == Mediator.id)
-            .where(model.identity_id == identity_id)
-        )
-        # A draft or pending mediator: nothing to route through yet.
-        if mediator is not None and mediator.published_at is not None:
-            return mediators.did_web(mediator.url)
+    item = await acting(db, identity_id)
+    if item is None:
+        return None
+    if isinstance(item, Mediator):
+        return item.url
+    # The tenant, issuer or verifier acting as it routes through its mediator.
+    mediator = await db.get(Mediator, item.mediator_id) if item.mediator_id else None
+    # A draft or pending mediator: nothing to route through yet.
+    if mediator is not None and mediator.published_at is not None:
+        return mediators.did_web(mediator.url)
     return None
 
 
 async def _wallets(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
-    subjects = await db.scalars(
-        select(UserIdentity.subject).where(
-            UserIdentity.user_id == user_id, UserIdentity.provider == "almena"
+    async def find() -> list[str]:
+        subjects = await db.scalars(
+            select(UserIdentity.subject).where(
+                UserIdentity.user_id == user_id, UserIdentity.provider == "almena"
+            )
         )
-    )
-    return sorted({webvh.multikey(subject) for subject in subjects})
+        return sorted({webvh.multikey(subject) for subject in subjects})
+
+    return list(await memo.remembered(db, ("wallets", user_id), find))
 
 
 async def signing_keys(db: AsyncSession, identity: Identity) -> list[str]:
     """The multikeys that sign for the identity (see the module's **Keys**)."""
-    tenant = await db.scalar(select(Tenant).where(Tenant.identity_id == identity.id))
-    if tenant is not None:
-        return await update_keys(db, tenant.id)
-    item: Issuer | Verifier | None = await db.scalar(
-        select(Issuer).where(Issuer.identity_id == identity.id)
-    ) or await db.scalar(select(Verifier).where(Verifier.identity_id == identity.id))
-    if item is None or item.signing != "single_user" or item.signer_id is None:
+    item = await acting(db, identity.id)
+    if isinstance(item, Tenant):
+        return await update_keys(db, item.id)
+    if not isinstance(item, Issuer | Verifier):
+        return []
+    if item.signing != "single_user" or item.signer_id is None:
         return []
     # A signer who left the tenant signs nothing.
     member = await db.get(TenantMember, (item.tenant_id, item.signer_id))
@@ -255,11 +285,11 @@ async def desired(db: AsyncSession, did_url: str, identity: Identity) -> dict[st
     DID's template while it is pending."""
     root = await is_root_identity(db, identity.id)
     did = identity.did or template_for(did_url, identity.slug, root)
-    own = await db.scalar(select(Tenant.id).where(Tenant.identity_id == identity.id))
+    item = await acting(db, identity.id)
     controller = await controller_for(db, identity.id)
     endpoint = await endpoint_for(db, identity.id)
     # An issuer or verifier with no key yet has nothing to be written to with.
-    if identity.agreement_key is None and await messaging_keys.owner(db, identity.id):
+    if identity.agreement_key is None and isinstance(item, Issuer | Verifier):
         endpoint = None
     return document(
         did,
@@ -267,7 +297,7 @@ async def desired(db: AsyncSession, did_url: str, identity: Identity) -> dict[st
         controller=controller,
         domains=await linked_domains(db, identity.id),
         keys=await signing_keys(db, identity),
-        authenticate=own is not None,
+        authenticate=isinstance(item, Tenant),
         controller_keys=await update_keys(db, identity.tenant_id) if controller else None,
         agreement_key=identity.agreement_key,
     )
@@ -275,17 +305,40 @@ async def desired(db: AsyncSession, did_url: str, identity: Identity) -> dict[st
 
 async def update_keys(db: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
     """Who may sign the tenant's identities: what its signing flow says."""
-    return await signing_flows.signers(db, tenant_id)
+    keys = await memo.remembered(
+        db, ("update_keys", tenant_id), lambda: signing_flows.signers(db, tenant_id)
+    )
+    return list(keys)
 
 
 async def log(db: AsyncSession, identity_id: uuid.UUID) -> list[webvh.Entry]:
     """The identity's signed log, oldest first."""
+    kept = memo.kept(db).get(("log", identity_id))
+    if kept is not None:
+        return cast(list[webvh.Entry], json.loads(kept))
     rows = await db.scalars(
         select(DidLogEntry.entry)
         .where(DidLogEntry.identity_id == identity_id)
         .order_by(DidLogEntry.version)
     )
     return [json.loads(row) for row in rows]
+
+
+async def prefetch_logs(db: AsyncSession, identity_ids: list[uuid.UUID]) -> None:
+    """The logs of many identities in one query, kept for `log` to answer
+    from for the rest of the request (a list page, row by row)."""
+    found: dict[uuid.UUID, list[str]] = {identity_id: [] for identity_id in identity_ids}
+    rows = await db.execute(
+        select(DidLogEntry.identity_id, DidLogEntry.entry)
+        .where(DidLogEntry.identity_id.in_(identity_ids))
+        .order_by(DidLogEntry.identity_id, DidLogEntry.version)
+    )
+    for identity_id, entry in rows:
+        found[identity_id].append(entry)
+    kept = memo.kept(db)
+    for identity_id, entries in found.items():
+        # Kept as JSON text: every reader gets entries of its own to change.
+        kept[("log", identity_id)] = "[" + ",".join(entries) + "]"
 
 
 def _unsigned(entry: webvh.Entry) -> webvh.Entry:
@@ -314,6 +367,34 @@ async def next_entry(db: AsyncSession, did_url: str, identity: Identity) -> webv
     if not active:
         raise webvh.LogError("no_signers")
     return webvh.following(_unsigned(entries[-1]), parameters, state, when)
+
+
+class LogMoved(Exception):
+    """The log no longer ends where an entry was built from."""
+
+
+async def append(
+    db: AsyncSession,
+    identity: Identity,
+    previous: str | None,
+    entry: webvh.Entry,
+    proof: dict[str, Any],
+) -> None:
+    """Writes a signed entry at the end of the identity's log (the caller
+    commits); `LogMoved` when the log no longer ends at `previous`."""
+    entries = await log(db, identity.id)
+    head = entries[-1]["versionId"] if entries else None
+    if head != previous:
+        raise LogMoved
+    db.add(
+        DidLogEntry(
+            identity_id=identity.id,
+            version=len(entries) + 1,
+            entry=json.dumps(webvh.signed(entry, proof), separators=(",", ":")),
+        )
+    )
+    if identity.did is None:
+        identity.did = str(entry["state"]["id"])
 
 
 async def status_of(db: AsyncSession, did_url: str, identity: Identity) -> Status:

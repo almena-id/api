@@ -342,3 +342,76 @@ async def test_one_opens_and_changes(
     assert (await client.get(url, headers=bob)).status_code == 404
     missing = await client.get(f"{base}/{kind}/{uuid.uuid4()}", headers=headers)
     assert missing.status_code == 404
+
+
+async def test_an_identity_is_renamed(client: AsyncClient, outbox: Outbox) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@example.org")
+    base = f"/api/v1/tenants/{tenant}"
+    issuer = (await client.post(f"{base}/issuers", json={"name": "Uni"}, headers=headers)).json()
+    path = f"{base}/identities/{issuer['identity']['id']}"
+    renamed = await client.patch(path, json={"name": " Uni keys "}, headers=headers)
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Uni keys"
+    # What acts as it keeps its own name.
+    detail = (await client.get(f"{base}/issuers/{issuer['id']}", headers=headers)).json()
+    assert detail["name"] == "Uni"
+    assert (await client.patch(path, json={"name": " "}, headers=headers)).status_code == 422
+    missing = await client.patch(
+        f"{base}/identities/{uuid.uuid4()}", json={"name": "X"}, headers=headers
+    )
+    assert missing.status_code == 404
+
+
+async def test_an_identity_is_deleted_while_unused_and_unsigned(
+    client: AsyncClient, outbox: Outbox
+) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@example.org")
+    base = f"/api/v1/tenants/{tenant}"
+    spare = (
+        await client.post(f"{base}/identities", json={"name": "Spare"}, headers=headers)
+    ).json()
+    assert (
+        await client.delete(f"{base}/identities/{spare['id']}", headers=headers)
+    ).status_code == 204
+    assert (
+        await client.get(f"{base}/identities/{spare['id']}", headers=headers)
+    ).status_code == 404
+
+    issuer = (await client.post(f"{base}/issuers", json={"name": "Uni"}, headers=headers)).json()
+    used = await client.delete(f"{base}/identities/{issuer['identity']['id']}", headers=headers)
+    assert used.status_code == 409 and used.json()["detail"] == "identity_in_use"
+
+    # The tenant's own, once signed, stays.
+    wallet = FakeWallet()
+    await link_wallet(client, headers, wallet)
+    own = (await client.get(base, headers=headers)).json()["identity"]["id"]
+    await sign(client, headers, tenant, own, wallet)
+    taken = await client.delete(f"{base}/identities/{own}", headers=headers)
+    assert taken.status_code == 409 and taken.json()["detail"] == "identity_in_use"
+
+
+async def test_a_signed_identity_stays(client: AsyncClient, outbox: Outbox) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@example.org")
+    base = f"/api/v1/tenants/{tenant}"
+    wallet = FakeWallet()
+    await link_wallet(client, headers, wallet)
+    own = (await client.get(base, headers=headers)).json()["identity"]["id"]
+    await sign(client, headers, tenant, own, wallet)
+    loose = (
+        await client.post(f"{base}/identities", json={"name": "Loose"}, headers=headers)
+    ).json()
+    await sign(client, headers, tenant, loose["id"], wallet)
+    signed = await client.delete(f"{base}/identities/{loose['id']}", headers=headers)
+    assert signed.status_code == 409 and signed.json()["detail"] == "identity_signed"
+
+
+async def test_only_admins_delete_identities(client: AsyncClient, outbox: Outbox) -> None:
+    ada, tenant = await _sign_in(client, outbox, "ada@example.org")
+    base = f"/api/v1/tenants/{tenant}"
+    await client.post(
+        f"{base}/invitations", json={"email": "bob@example.org", "role": "member"}, headers=ada
+    )
+    bob, _ = await _sign_in(client, outbox, "bob@example.org")
+    spare = (await client.post(f"{base}/identities", json={"name": "Spare"}, headers=bob)).json()
+    denied = await client.delete(f"{base}/identities/{spare['id']}", headers=bob)
+    assert denied.status_code == 403 and denied.json()["detail"] == "not_admin"

@@ -37,10 +37,11 @@ from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import (
+    custody,
     dids,
     issuance,
     messaging_keys,
@@ -48,6 +49,7 @@ from registry_api import (
     queues,
     signing_flows,
     status_lists,
+    throttle,
     wallet,
     webvh,
 )
@@ -58,7 +60,7 @@ from registry_api.api.routes.auth import (
     OptionalSession,
     SignedIn,
     as_utc,
-    new_tenant,
+    own_tenant,
     sign_in,
 )
 from registry_api.api.routes.directory import TenantId
@@ -67,13 +69,11 @@ from registry_api.config import get_settings
 from registry_api.mail import Locale
 from registry_api.models import (
     Application,
-    DidLogEntry,
     Identity,
     Issuer,
     Mediator,
     StatusList,
     Tenant,
-    TenantMember,
     User,
     UserIdentity,
     Verifier,
@@ -92,9 +92,6 @@ PROVIDER = "almena"
 TTL = timedelta(minutes=5)
 
 # The identity of a tenant with no name, until the tenant is named.
-_UNNAMED: dict[Locale, str] = {"en": "Unnamed tenant", "es": "Tenant sin nombre"}
-
-
 # Who asks a wallet: the registry portal, or the `almena` CLI.
 Client = Literal["portal", "cli"]
 
@@ -109,6 +106,13 @@ class LocaleIn(BaseModel):
     # The portal's language.
     locale: Locale = "en"
     client: Client = "portal"
+
+
+class SignedOut(BaseModel):
+    """What asking for a signature answers when nobody's wallet is asked: the
+    platform signed it as the tenant, under its flow `none` (`custody`)."""
+
+    status: Literal["signed"] = "signed"
 
 
 class RequestOut(BaseModel):
@@ -222,14 +226,28 @@ async def _live(db: AsyncSession, request_id: uuid.UUID) -> WalletRequest:
 @router.post(
     "/requests",
     summary="Ask a wallet to sign in, or to link to the signed-in account",
-    responses={status.HTTP_401_UNAUTHORIZED: {"description": "`not_authenticated` (link)"}},
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "`not_authenticated` (link)"},
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": "`too_many_requests`: too many sign-ins from the network address"
+        },
+    },
 )
-async def create_request(body: RequestIn, session: OptionalSession, db: DbSession) -> RequestOut:
+async def create_request(
+    body: RequestIn, request: Request, session: OptionalSession, db: DbSession
+) -> RequestOut:
     if body.purpose == "link" and session is None:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
             detail="not_authenticated",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+    if body.purpose != "link":
+        # Anyone may ask to sign in: counted by where it comes from.
+        await throttle.hit(
+            db,
+            "too_many_requests",
+            throttle.per_ip("wallet", request, get_settings().ip_wallet_requests_per_hour),
         )
     user_id = session.user_id if body.purpose == "link" and session else None
     return await _new_request(db, body.purpose, user_id, body.locale, body.client)
@@ -244,8 +262,6 @@ async def _new_request(
     payload: str | None = None,
 ) -> RequestOut:
     now = datetime.now(UTC)
-    # Old requests go as new ones come.
-    await db.execute(delete(WalletRequest).where(WalletRequest.expires_at <= now))
     poll = new_token()
     found = WalletRequest(
         poll_hash=digest(poll),
@@ -378,9 +394,13 @@ async def _sign(
     assert isinstance(proof, dict)
     signed_document = {**sign.document, "proof": proof}
     if sign.kind == "endorsement":
-        await _endorse(db, payload, sign, signed_document, body.get("presentation_proof"), did)
+        await endorse(db, payload, sign, signed_document, body.get("presentation_proof"), did)
     else:
-        await _append(db, uuid.UUID(payload["identity_id"]), payload["previous"], sign, proof)
+        identity = await db.get_one(Identity, uuid.UUID(payload["identity_id"]))
+        try:
+            await dids.append(db, identity, payload["previous"], sign.document, proof)
+        except dids.LogMoved:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="log_moved") from None
     found.did = did
     await db.commit()
 
@@ -451,32 +471,7 @@ async def _set_statuses(
         await queues.status_changed(db, notifier.broker, changed)
 
 
-async def _append(
-    db: AsyncSession,
-    identity_id: uuid.UUID,
-    previous: str | None,
-    sign: SignObject,
-    proof: dict[str, Any],
-) -> None:
-    entry: webvh.Entry = sign.document
-    identity = await db.get_one(Identity, identity_id)
-    # The log must still end where the entry was built from.
-    entries = await dids.log(db, identity.id)
-    head = entries[-1]["versionId"] if entries else None
-    if head != previous:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="log_moved")
-    db.add(
-        DidLogEntry(
-            identity_id=identity.id,
-            version=len(entries) + 1,
-            entry=json.dumps(webvh.signed(entry, proof), separators=(",", ":")),
-        )
-    )
-    if identity.did is None:
-        identity.did = str(entry["state"]["id"])
-
-
-async def _endorse(
+async def endorse(
     db: AsyncSession,
     payload: dict[str, Any],
     sign: SignObject,
@@ -530,8 +525,7 @@ async def _account_for(db: AsyncSession, did: str, locale: Locale) -> User:
     user = User(email=None)
     db.add(user)
     await db.flush()
-    tenant = await new_tenant(db, None, _UNNAMED[locale], languages=[locale])
-    db.add(TenantMember(tenant_id=tenant.id, user_id=user.id, role="admin"))
+    await own_tenant(db, user, locale)
     db.add(UserIdentity(user_id=user.id, provider=PROVIDER, subject=did, email=None))
     await db.flush()
     return user
@@ -586,17 +580,19 @@ async def request_result(
 
 @signing.post(
     "/identities/{identity_id}/sign",
-    summary="Ask the signer's wallet to sign the identity's next log entry "
-    "(whoever signs as the tenant under its flow)",
+    summary="Sign the identity's next log entry: a request for the signer's wallet "
+    "(whoever signs as the tenant under its flow), or signed by the platform at once "
+    'under `none` (`{status: "signed"}`)',
     responses={
         status.HTTP_403_FORBIDDEN: {"description": "`not_a_signer`"},
         status.HTTP_404_NOT_FOUND: {"description": "`identity_not_found`"},
         status.HTTP_409_CONFLICT: {
-            "description": "`up_to_date`: nothing to sign; `no_signers`: no signer has a wallet"
+            "description": "`up_to_date`: nothing to sign; `no_signers`: no signer has a "
+            "wallet; `log_moved`"
         },
         status.HTTP_503_SERVICE_UNAVAILABLE: {
             "description": "`vault_unavailable`: an issuer's or verifier's messaging key "
-            "could not be made"
+            "could not be made, or the platform could not sign"
         },
     },
 )
@@ -607,11 +603,31 @@ async def sign_identity(
     session: CurrentSession,
     db: DbSession,
     vault: Annotated[Vault, Depends(get_vault)],
-) -> RequestOut:
+) -> RequestOut | SignedOut:
     identity = await db.get(Identity, identity_id)
     if identity is None or identity.tenant_id != tenant_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="identity_not_found")
-    if not await signing_flows.signs(db, await db.get_one(Tenant, tenant_id), session.user_id):
+    tenant = await db.get_one(Tenant, tenant_id)
+    flow_signer = await signing_flows.signs(db, tenant, session.user_id)
+    # Signed by the platform: whoever the flow names asks for it.
+    if flow_signer:
+        try:
+            if await custody.sign_entry(db, vault, identity):
+                await db.commit()
+                return SignedOut()
+        except VaultError:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, detail="vault_unavailable"
+            ) from None
+        except dids.LogMoved:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="log_moved") from None
+    # Signed from a wallet: the flow's signers — or, moving to `none`, the
+    # old flow's, whose keys are still in force, handing over to the platform.
+    mine = set(await my_keys(db, session.user_id))
+    handing_over = tenant.signing_flow == "none" and mine & set(
+        webvh.active_update_keys(await dids.log(db, identity.id))
+    )
+    if not flow_signer and not handing_over:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
     # Signing an issuer or a verifier is when its messaging key is made, so
     # the entry signed now is the one that lists it.
@@ -632,9 +648,8 @@ async def sign_identity(
         raise HTTPException(status.HTTP_409_CONFLICT, detail="up_to_date")
     entries = await dids.log(db, identity.id)
     signers = webvh.signers_for(entries, entry)
-    if not set(await my_keys(db, session.user_id)) & set(signers):
+    if not mine & set(signers):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
-    tenant = await db.get_one(Tenant, identity.tenant_id)
     sign = SignObject(
         kind="did_log_entry",
         identity=identity.name,

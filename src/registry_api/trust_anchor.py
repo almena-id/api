@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import credential_catalog as credentials
 from registry_api import field_catalog as catalog
+from registry_api import memo
 from registry_api.models import (
     CatalogCategory,
     CatalogDomain,
@@ -70,7 +71,11 @@ class Catalogue:
 
 async def anchor_id(db: AsyncSession) -> uuid.UUID | None:
     """The anchor: the root tenant; none before it is made."""
-    return await db.scalar(select(Tenant.id).where(Tenant.root))
+
+    async def find() -> uuid.UUID | None:
+        return await db.scalar(select(Tenant.id).where(Tenant.root))
+
+    return await memo.remembered(db, "anchor_id", find)
 
 
 def as_field(item: CatalogField, domains: dict[str, catalog.Domain], anchor: bool) -> catalog.Field:
@@ -109,7 +114,13 @@ def type_data(item: CatalogType) -> dict[str, Any]:
 
 async def load(db: AsyncSession, tenant_id: uuid.UUID | None = None) -> Catalogue:
     """The catalogue as `tenant_id` sees it: the anchor's, and — when it is not
-    the anchor — its own fields and credential types (`custom:{key}`)."""
+    the anchor — its own fields and credential types (`custom:{key}`). Read
+    once per request until something is written (`registry_api.memo`); never
+    changed by whoever reads it."""
+    return await memo.remembered(db, ("catalogue", tenant_id), lambda: _load(db, tenant_id))
+
+
+async def _load(db: AsyncSession, tenant_id: uuid.UUID | None) -> Catalogue:
     anchor = await anchor_id(db)
     domains: dict[str, catalog.Domain] = {}
     field_categories: dict[str, catalog.Labels] = {}

@@ -82,7 +82,7 @@ async def test_a_tenant_keeps_types_of_its_own(client: AsyncClient, outbox: Outb
         json={"name": {"en": "x"}, "fields": [], "credentials": [{"type": "custom:pass"}]},
         headers=other,
     )
-    assert form.status_code == 422 and form.json()["detail"]["code"] == "credential_unknown"
+    assert form.status_code == 422 and form.json()["detail"] == "credential_unknown"
     issuer = await _post(
         client,
         other,
@@ -199,7 +199,7 @@ async def test_only_its_issuers_are_trusted(client: AsyncClient, outbox: Outbox)
         json={"name": {"en": "x"}, "fields": [], "credentials": [{**own, "issuers": [rival.did]}]},
         headers=headers,
     )
-    assert rival_named.json()["detail"]["code"] == "credential_trust_invalid"
+    assert rival_named.json()["detail"] == "credential_trust_invalid"
 
     form = await _post(
         client,

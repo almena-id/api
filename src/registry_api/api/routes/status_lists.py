@@ -25,9 +25,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import status_lists
-from registry_api.api.routes.applications import _received
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import TenantId
+from registry_api.api.routes.inbox import received
 from registry_api.api.routes.issuance import signing_key
 from registry_api.api.routes.issuer_credentials import _issuer
 from registry_api.api.routes.wallet import (
@@ -184,7 +184,7 @@ async def change_status(
     session: CurrentSession,
     db: DbSession,
 ) -> RequestOut:
-    item: Application = await _received(db, tenant_id, application_id)
+    item: Application = await received(db, tenant_id, application_id)
     if item.status != "issued":
         raise HTTPException(status.HTTP_409_CONFLICT, detail="not_issued")
     listed = await db.get(StatusList, item.status_list_id) if item.status_list_id else None

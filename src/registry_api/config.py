@@ -4,7 +4,7 @@ from functools import lru_cache
 from ipaddress import ip_address
 from typing import Literal
 
-from pydantic import Field, IPvAnyAddress, PostgresDsn, SecretStr
+from pydantic import Field, IPvAnyAddress, PostgresDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -58,6 +58,28 @@ class Settings(BaseSettings):
     # Emailed sign-in codes: lifetime and wrong guesses allowed per code.
     login_code_ttl_minutes: int = Field(default=10, gt=0)
     login_code_max_attempts: int = Field(default=5, gt=0)
+    # Per address (registry_api.throttle): this long at least between two codes,
+    # and so many an hour at most; 0 lifts either.
+    login_code_resend_seconds: int = Field(default=60, ge=0)
+    login_codes_per_hour: int = Field(default=5, ge=0)
+    # Wrong codes per address, whichever codes they were for: so many lock it
+    # for `login_lock_minutes`, and a day takes no more than `login_failures_per_day`.
+    login_lock_failures: int = Field(default=5, ge=0)
+    login_lock_minutes: int = Field(default=15, gt=0)
+    login_failures_per_day: int = Field(default=20, ge=0)
+    # Per network address, an hour: codes asked for, wrong codes, applications
+    # started, wallet sign-ins asked for; 0 lifts the limit.
+    ip_login_codes_per_hour: int = Field(default=20, ge=0)
+    ip_login_failures_per_hour: int = Field(default=30, ge=0)
+    ip_applications_per_hour: int = Field(default=30, ge=0)
+    ip_wallet_requests_per_hour: int = Field(default=60, ge=0)
+    # Shared with the portals (registry, catalog), which call this API from their
+    # servers: with it they name their visitor's address, so the limits above
+    # count visitors rather than the portal. Empty: no caller may name one.
+    portal_secret: SecretStr = SecretStr("")
+
+    # Every so many minutes, what has run out is deleted (registry_api.housekeeping); 0 never.
+    housekeeping_minutes: int = Field(default=15, ge=0)
 
     # Outgoing mail. Development points at Mailpit (localhost:1025, no auth).
     smtp_host: str = "localhost"
@@ -107,6 +129,17 @@ class Settings(BaseSettings):
     apple_team_id: str = ""
     apple_key_id: str = ""
     apple_private_key: SecretStr = SecretStr("")
+
+    @model_validator(mode="after")
+    def _safe_in_production(self) -> "Settings":
+        """In production, nothing left as the development defaults that would
+        open it: the database's password must be set."""
+        if self.environment == "production" and self.db_password.get_secret_value() in (
+            "",
+            "registry",
+        ):
+            raise ValueError("REGISTRY_DB_PASSWORD must be set in production")
+        return self
 
     @property
     def database_url(self) -> str:

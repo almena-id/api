@@ -7,7 +7,8 @@ Each starts as a draft, seen only by the tenant's members. **Publishing is
 endorsing**: whoever signs as the tenant signs from a wallet the tenant's membership credential
 for it and, in the same approval, its `whois.vp` (see `credentials` and
 `wallet.py`); once both are checked it is published — its DID resolves, the
-catalogue lists it. Unpublishing takes all of it back.
+catalogue lists it. Under the flow `none` the platform signs both when an
+admin publishes, at once (`custody`). Unpublishing takes all of it back.
 
 The catalogue — and the endorsement — name the tenant by its DID, never by
 the tenant's own name, which starts as "Tenant of {email}".
@@ -17,7 +18,6 @@ stops resolving for good, and an issuer's or verifier's keys leave the vault.
 A mediator's users are left without one.
 """
 
-import base64
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -25,16 +25,18 @@ from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import func, or_, select, update
 
-from registry_api import credentials, dids, messaging_keys, signing_flows
+from registry_api import credentials, custody, dids, messaging_keys, paging, signing_flows
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import ItemDetail, TenantId, item_detail
 from registry_api.api.routes.members import admin_of
 from registry_api.api.routes.wallet import (
     LocaleIn,
     RequestOut,
+    SignedOut,
     SignObject,
+    endorse,
     my_keys,
     new_sign_request,
 )
@@ -84,14 +86,18 @@ async def _unpublish(db: DbSession, item: Publishable) -> ItemDetail:
     "/{kind}/{item_id}/publish",
     summary="Publish an issuer, verifier or mediator by endorsing it: a request for the "
     "signer's wallet to sign the tenant's membership credential and the item's whois.vp "
-    "(publishing again renews it)",
+    "or, under the flow `none`, both signed by the platform at once "
+    '(`{status: "signed"}`); publishing again renews it',
     responses={
         403: {"description": "`not_a_signer`: no wallet of theirs signs for it"},
         409: {
             "description": "`identity_pending`: its identity is not signed yet; "
             "`identity_outdated`: its published document does not name the admin's key yet; "
-            "`tenant_pending`: the tenant's DID is not signed yet"
+            "`tenant_pending`: the tenant's DID is not signed yet; "
+            "`tenant_outdated`: under `none`, the tenant's DID or the item's does not name "
+            "the platform's key yet (the old flow's signers hand over first)"
         },
+        503: {"description": "`vault_unavailable`: the platform could not sign"},
     },
 )
 async def publish(
@@ -101,7 +107,8 @@ async def publish(
     body: LocaleIn,
     session: CurrentSession,
     db: DbSession,
-) -> RequestOut:
+    vault: Annotated[Vault, Depends(get_vault)],
+) -> RequestOut | SignedOut:
     item = await _owned(db, kind, tenant_id, item_id)
     identity = await db.get_one(Identity, item.identity_id)
     tenant = await db.get_one(Tenant, tenant_id)
@@ -109,6 +116,9 @@ async def publish(
     # not name is told so, whatever state the item is in.
     if not await signing_flows.signs(db, tenant, session.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
+    # Under `none` whatever waits to be signed is, first: the platform signs it.
+    if tenant.signing_flow == "none":
+        await custody.settle(db, vault, tenant_id)
     owner = await db.get(Identity, tenant.identity_id) if tenant.identity_id else None
     # Nothing is published under a DID that does not exist yet.
     if identity.did is None:
@@ -125,8 +135,13 @@ async def publish(
         if str(ref).startswith(f"{owner.did}#")
     }
     signers = sorted(tenant_keys & controlling)
-    mine = set(await my_keys(db, session.user_id))
+    # Under `none` the platform's key is the one.
+    platform = tenant.platform_key if tenant.signing_flow == "none" else None
+    mine = {platform} if platform else set(await my_keys(db, session.user_id))
     if not mine & set(signers):
+        # Moving to `none`, the tenant's DID still names the old flow's keys.
+        if platform:
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="tenant_outdated")
         if mine & tenant_keys:
             raise HTTPException(status.HTTP_409_CONFLICT, detail="identity_outdated")
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
@@ -154,7 +169,27 @@ async def publish(
         },
     )
     extra = {"kind": kind, "item_id": str(item.id), "identity_id": str(identity.id)}
+    if platform:
+        try:
+            signed = {**credential, "proof": await _signed(vault, tenant, request)}
+            presentation = {**(request.presentation or {}), "verifiableCredential": [signed]}
+            presented = await custody.proof(
+                vault, tenant, presentation, owner.did, "authentication"
+            )
+        except VaultError:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, detail="vault_unavailable"
+            ) from None
+        await endorse(db, extra, request, signed, presented, f"did:key:{platform}")
+        await db.commit()
+        return SignedOut()
     return await new_sign_request(db, session.user_id, body, request, extra)
+
+
+async def _signed(vault: Vault, tenant: Tenant, request: SignObject) -> dict[str, Any]:
+    return await custody.proof(
+        vault, tenant, request.document, request.verification_method, request.proof_purpose
+    )
 
 
 @router.post(
@@ -201,6 +236,9 @@ async def delete(
     if identity is not None:
         await db.delete(identity)
     await db.commit()
+    # A mediator's users name it no more: under `none` that is signed now.
+    if isinstance(item, Mediator):
+        await custody.settle(db, vault, tenant_id)
     # After the commit: a key left behind by a vault that failed is harmless
     # (nothing names it any more); an item left without its key is not.
     if isinstance(item, Issuer | Verifier):
@@ -243,21 +281,6 @@ class CatalogPage(BaseModel):
     next_cursor: str | None
 
 
-def _encode(item: Publishable) -> str:
-    assert item.published_at is not None
-    raw = f"{item.published_at.isoformat()}|{item.id}"
-    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
-
-
-def _decode(cursor: str) -> tuple[datetime, uuid.UUID]:
-    try:
-        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
-        moment, item_id = raw.split("|")
-        return datetime.fromisoformat(moment), uuid.UUID(item_id)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_cursor") from None
-
-
 async def _tenant(db: DbSession, tenant_id: uuid.UUID) -> TenantPublic:
     tenant = await db.get(Tenant, tenant_id)
     owner = await db.get(Identity, tenant.identity_id) if tenant and tenant.identity_id else None
@@ -277,8 +300,8 @@ async def _tenant(db: DbSession, tenant_id: uuid.UUID) -> TenantPublic:
 async def list_published(
     kind: Kind,
     db: DbSession,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    cursor: Annotated[str | None, Query(max_length=200)] = None,
+    limit: paging.Limit = 20,
+    cursor: paging.Cursor = None,
     q: Annotated[str | None, Query(max_length=100)] = None,
     grants: Annotated[str | None, Query(max_length=64)] = None,
     tenant: Annotated[str | None, Query(max_length=255)] = None,
@@ -308,14 +331,8 @@ async def list_published(
             )
         )
 
-    def after(moment: datetime, item_id: uuid.UUID) -> Any:
-        return or_(
-            model.published_at < moment,
-            and_(model.published_at == moment, model.id < item_id),
-        )
-
     if cursor:
-        query = query.where(after(*_decode(cursor)))
+        query = query.where(paging.after(model.published_at, model.id, cursor))
     query = query.order_by(model.published_at.desc(), model.id.desc())
     # The types an issuer grants are a JSON list: those that grant `grants`
     # are picked here, a batch at a time, until the page is full.
@@ -332,7 +349,7 @@ async def list_published(
             break
         last = found[-1]
         assert last.published_at is not None
-        batch = query.where(after(last.published_at, last.id))
+        batch = query.where(paging.beyond(model.published_at, model.id, last.published_at, last.id))
     more = len(rows) > limit
     rows = rows[:limit]
     tenants: dict[uuid.UUID, TenantPublic] = {}
@@ -356,4 +373,10 @@ async def list_published(
                 tenant=tenants[row.tenant_id],
             )
         )
-    return CatalogPage(items=items, next_cursor=_encode(rows[-1]) if more else None)
+    last_row = rows[-1] if rows else None
+    return CatalogPage(
+        items=items,
+        next_cursor=paging.encode(last_row.published_at, last_row.id)
+        if more and last_row
+        else None,
+    )

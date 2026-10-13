@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -195,12 +195,17 @@ async def ways_in(session: CurrentSession, db: DbSession) -> WaysIn:
     summary="Link an email, proved by the code sent to it (replaces the one there was)",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"description": "`invalid_code`: wrong or expired"},
-        status.HTTP_429_TOO_MANY_REQUESTS: {"description": "`too_many_attempts`: ask again"},
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": "`too_many_attempts`: this code, or the address for a while "
+            "(`Retry-After`); `too_many_requests`: the network address"
+        },
     },
 )
-async def link_email(body: EmailLink, session: CurrentSession, db: DbSession) -> LinkResult:
+async def link_email(
+    body: EmailLink, request: Request, session: CurrentSession, db: DbSession
+) -> LinkResult:
     email = body.email.lower()
-    await check_code(db, email, body.code)
+    await check_code(db, request, email, body.code)
     user = session.user
     owner = await db.scalar(select(User.id).where(User.email == email))
     if owner is not None:

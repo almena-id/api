@@ -1,7 +1,9 @@
 """The domains a tenant links to itself.
 
 Admins add a domain and get the DNS TXT record that proves it
-(``_almena.{domain}`` = ``almena-verify=…``); once the record is found the
+(``_almena-{tenant-slug}.{domain}`` = ``almena-verify=…``, see
+`registry_api.dns_proof`); the same domain may be linked and verified by
+several tenants, each with its own record. Once the record is found the
 domain is verified and the tenant's DID document names it (`LinkedDomains`),
 which leaves its identity with changes to sign. A verified domain can be
 checked again: the record still there, it stays verified; gone, it stops being
@@ -17,11 +19,12 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from registry_api import custody
 from registry_api import dns_proof as checks
 from registry_api.api.routes.auth import DbSession
-from registry_api.api.routes.directory import TenantId
+from registry_api.api.routes.directory import TenantId, VaultDep
 from registry_api.api.routes.members import admin_of
-from registry_api.models import TenantDomain
+from registry_api.models import Tenant, TenantDomain
 
 router = APIRouter(prefix="/tenants/{tenant_id}/domains", tags=["domains"])
 
@@ -50,8 +53,8 @@ class DomainIn(BaseModel):
     domain: str = Field(min_length=1, max_length=300)
 
 
-def _out(item: TenantDomain) -> DomainOut:
-    name, value = checks.dns_record(item.domain, item.dns_token)
+def _out(item: TenantDomain, tenant_slug: str) -> DomainOut:
+    name, value = checks.dns_record(item.domain, item.dns_token, tenant_slug)
     return DomainOut(
         id=item.id,
         domain=item.domain,
@@ -60,6 +63,10 @@ def _out(item: TenantDomain) -> DomainOut:
         verified_at=item.verified_at,
         created_at=item.created_at,
     )
+
+
+async def _slug(db: DbSession, tenant_id: uuid.UUID) -> str:
+    return (await db.get_one(Tenant, tenant_id)).slug
 
 
 async def _owned(db: DbSession, tenant_id: uuid.UUID, domain_id: uuid.UUID) -> TenantDomain:
@@ -76,7 +83,8 @@ async def list_domains(tenant_id: TenantId, db: DbSession) -> list[DomainOut]:
         .where(TenantDomain.tenant_id == tenant_id)
         .order_by(TenantDomain.created_at, TenantDomain.id)
     )
-    return [_out(item) for item in items]
+    slug = await _slug(db, tenant_id)
+    return [_out(item, slug) for item in items]
 
 
 @router.post(
@@ -109,7 +117,7 @@ async def add_domain(tenant_id: AdminTenant, body: DomainIn, db: DbSession) -> D
     db.add(item)
     await db.commit()
     await db.refresh(item)
-    return _out(item)
+    return _out(item, await _slug(db, tenant_id))
 
 
 @router.post(
@@ -127,12 +135,22 @@ async def add_domain(tenant_id: AdminTenant, body: DomainIn, db: DbSession) -> D
     },
 )
 async def check_domain(
-    tenant_id: AdminTenant, domain_id: uuid.UUID, db: DbSession, lookup: TxtLookup
+    tenant_id: AdminTenant,
+    domain_id: uuid.UUID,
+    db: DbSession,
+    lookup: TxtLookup,
+    vault: VaultDep,
 ) -> DomainOut:
     item = await _owned(db, tenant_id, domain_id)
-    name, value = checks.dns_record(item.domain, item.dns_token)
+    slug = await _slug(db, tenant_id)
+    name, value = checks.dns_record(item.domain, item.dns_token, slug)
     try:
-        found = value in (record.strip() for record in await lookup(name))
+        found = False
+        # Its own name first; then the shared one records were first published at.
+        for at in (name, checks.legacy_name(item.domain)):
+            if value in (record.strip() for record in await lookup(at)):
+                found = True
+                break
     except checks.DomainError as error:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=error.code) from None
     if not found:
@@ -140,10 +158,13 @@ async def check_domain(
         if item.verified_at is not None:
             item.verified_at = None
             await db.commit()
+            await custody.settle(db, vault, tenant_id)
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="dns_record_not_found")
     item.verified_at = datetime.now(UTC)
     await db.commit()
-    return _out(item)
+    # Under the flow `none` the DID documents that list it are signed now.
+    await custody.settle(db, vault, tenant_id)
+    return _out(item, slug)
 
 
 @router.delete(
@@ -152,7 +173,10 @@ async def check_domain(
     summary="Remove a domain (admins)",
     responses={status.HTTP_404_NOT_FOUND: {"description": "`domain_not_found`"}},
 )
-async def remove_domain(tenant_id: AdminTenant, domain_id: uuid.UUID, db: DbSession) -> Response:
+async def remove_domain(
+    tenant_id: AdminTenant, domain_id: uuid.UUID, db: DbSession, vault: VaultDep
+) -> Response:
     await db.delete(await _owned(db, tenant_id, domain_id))
     await db.commit()
+    await custody.settle(db, vault, tenant_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

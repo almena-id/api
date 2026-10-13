@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import field_catalog as catalog
-from registry_api import trust_anchor
+from registry_api import patterns, trust_anchor
 from registry_api.models import Form
 from registry_api.trust_anchor import PREFIX
 
@@ -61,7 +61,7 @@ def value_of(
             limit = narrow.get("max_length") or item.max_length
             if limit and len(text) > limit:
                 return None, "range"
-            if item.pattern and not re.fullmatch(item.pattern, text):
+            if item.pattern and not patterns.matches(item.pattern, text):
                 return None, "format"
             return text, None
         case "email":

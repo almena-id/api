@@ -17,6 +17,12 @@ A form may also ask for credentials to be presented (`credentials`, see
 `registry_api.form_credentials`): each fills the fields named as the claims it
 asks for, and the whole request is an OpenID4VP DCQL query (`…/dcql`). A form
 asks for one field or one credential at least.
+
+Any member changes a form (the whole of it) or deletes it. While it is in use
+— an issuer's offer puts it, or applications or verifications were made with
+it — it is never deleted, and a change may only take more than it took: every
+field and credential stays, required or less, as strict or less; new ones come
+optional; words change freely.
 """
 
 import re
@@ -24,15 +30,17 @@ import uuid
 from datetime import date, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import field_catalog as catalog
 from registry_api import form_credentials, presentations, texts, trust_anchor
 from registry_api.api.routes.auth import DbSession
 from registry_api.api.routes.directory import TenantId
-from registry_api.models import Form
+from registry_api.errors import Refusal
+from registry_api.models import Application, Form, Issuer, Verification
 from registry_api.trust_anchor import PREFIX
 
 router = APIRouter(prefix="/tenants/{tenant_id}/forms", tags=["forms"])
@@ -105,14 +113,18 @@ class FormOut(BaseModel):
     # Each as `{key, type, required, purpose?, claims, trust, issuers?}`, with
     # `fills`: the keys of the fields it fills.
     credentials: list[dict[str, Any]]
+    # An issuer's offer puts it, or something was made with it: it is not
+    # deleted, and a change may only take more than it took.
+    in_use: bool
     created_at: datetime
     updated_at: datetime
 
 
 def _refuse(code: str, field: int | None = None) -> HTTPException:
     """A refusal; one about a field says which (`field`: its index in `fields`)."""
-    detail: str | dict[str, Any] = code if field is None else {"code": code, "field": field}
-    return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+    if field is None:
+        return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=code)
+    return Refusal(status.HTTP_422_UNPROCESSABLE_CONTENT, code, field=field)
 
 
 def _narrow(item: catalog.Field, narrow: Narrow, index: int) -> dict[str, Any]:
@@ -227,7 +239,7 @@ async def _owned(db: DbSession, tenant_id: uuid.UUID, form_id: uuid.UUID) -> For
     return item
 
 
-def _out(item: Form) -> FormOut:
+def _out(item: Form, used: bool) -> FormOut:
     filled = form_credentials.fills(item.credentials, item.fields)
     return FormOut(
         id=item.id,
@@ -236,6 +248,7 @@ def _out(item: Form) -> FormOut:
         description=item.description,
         fields=item.fields,
         credentials=[{**entry, "fills": filled[entry["key"]]} for entry in item.credentials],
+        in_use=used,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -244,8 +257,20 @@ def _out(item: Form) -> FormOut:
 @router.get("", summary="The tenant's forms, newest first")
 async def list_forms(tenant_id: TenantId, db: DbSession) -> list[FormOut]:
     query = select(Form).where(Form.tenant_id == tenant_id)
-    items = await db.scalars(query.order_by(Form.created_at.desc(), Form.id.desc()))
-    return [_out(item) for item in items]
+    items = list(await db.scalars(query.order_by(Form.created_at.desc(), Form.id.desc())))
+    return [_out(item, await in_use(db, item)) for item in items]
+
+
+async def _languages(db: AsyncSession, tenant_id: uuid.UUID, body: FormIn) -> None:
+    """Every text of the form in the tenant's languages."""
+    await texts.enabled_only(
+        db,
+        tenant_id,
+        body.name,
+        body.description,
+        *(field.help for field in body.fields),
+        *(request.purpose for request in body.credentials),
+    )
 
 
 @router.post(
@@ -258,8 +283,9 @@ async def list_forms(tenant_id: TenantId, db: DbSession) -> list[FormOut]:
             "`field_unknown`, `field_rename_invalid`, `field_key_invalid`, "
             "`field_key_duplicate`, `field_narrow_invalid`, `credential_unknown`, "
             "`credential_key_invalid`, `credential_key_duplicate`, `credential_type_duplicate`, "
-            "`credential_claims_invalid` or `credential_trust_invalid`; one about a field or a "
-            "credential comes as `{code, field}` or `{code, credential}`, its index in the list"
+            "`credential_claims_invalid`, `credential_trust_invalid` or `language_not_enabled` "
+            "(a text in a language the tenant does not work in); one about a field or a "
+            "credential says which beside the code: `field` or `credential`, its index in the list"
         },
     },
 )
@@ -274,10 +300,96 @@ async def create_form(tenant_id: TenantId, body: FormIn, db: DbSession) -> FormO
         fields=_fields(body.fields, found.fields),
         credentials=await form_credentials.stored(db, found.types, body.credentials, tenant_id),
     )
+    await _languages(db, tenant_id, body)
     db.add(item)
     await db.commit()
     await db.refresh(item)
-    return _out(item)
+    return _out(item, False)
+
+
+async def in_use(db: AsyncSession, form: Form) -> bool:
+    """Whether an issuer's offer puts the form, or anything was made with it."""
+    for model in (Application, Verification):
+        made = await db.scalar(select(model.id).where(model.form_id == form.id).limit(1))
+        if made is not None:
+            return True
+    offers = await db.scalars(
+        select(Issuer.request_forms).where(Issuer.tenant_id == form.tenant_id)
+    )
+    return any(str(form.id) in (forms or {}).values() for forms in offers)
+
+
+def _keyed(fields: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(field.get("as") or _key(field["ref"])): field for field in fields}
+
+
+def _no_stricter(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Whether a field's `narrow` after turns away nothing it took before:
+    no bound now where there was none, and none tighter than it was."""
+    if "values" in after and (
+        "values" not in before or not set(before["values"]) <= set(after["values"])
+    ):
+        return False
+    low_now, low_then = after.get("min_date"), before.get("min_date")
+    if low_now is not None and (low_then is None or low_now > low_then):
+        return False
+    for bound in ("max_date", "max_length"):
+        now, then = after.get(bound), before.get(bound)
+        if now is not None and (then is None or now < then):
+            return False
+    return True
+
+
+# Why a change to a form in use is refused: which (`field`, `credential`, or
+# `None` for one taken away) and its index in what was sent.
+Wrong = tuple[str | None, int]
+
+
+def _takes_less(
+    form: Form, fields: list[dict[str, Any]], credentials: list[dict[str, Any]]
+) -> Wrong | None:
+    """For a form in use, what in the new `fields` and `credentials` would take
+    less than the form took; `None` when nothing would."""
+    before = _keyed(form.fields)
+    after = _keyed(fields)
+    if set(before) - set(after):
+        # A field taken away: the answers given to it would be lost.
+        return (None, -1)
+    for index, (key, field) in enumerate(after.items()):
+        old = before.get(key)
+        required = field.get("required", True)
+        if old is None:
+            if required:
+                return ("field", index)
+            continue
+        if (
+            field["ref"] != old["ref"]
+            or (required and not old.get("required", True))
+            or not _no_stricter(old.get("narrow", {}), field.get("narrow", {}))
+        ):
+            return ("field", index)
+    previous = {entry["key"]: entry for entry in form.credentials}
+    if set(previous) - {entry["key"] for entry in credentials}:
+        return (None, -1)
+    for index, entry in enumerate(credentials):
+        old = previous.get(entry["key"])
+        if old is None:
+            if entry["required"]:
+                return ("credential", index)
+            continue
+        same_trust = entry["trust"] == old["trust"] and set(old.get("issuers", [])) <= set(
+            entry.get("issuers", [])
+        )
+        # Any published issuer of the type takes in whichever were chosen.
+        wider_trust = old["trust"] == "issuers" and entry["trust"] == "registry"
+        if (
+            entry["type"] != old["type"]
+            or entry["claims"] != old["claims"]
+            or (entry["required"] and not old["required"])
+            or not (same_trust or wider_trust)
+        ):
+            return ("credential", index)
+    return None
 
 
 @router.get(
@@ -286,7 +398,67 @@ async def create_form(tenant_id: TenantId, body: FormIn, db: DbSession) -> FormO
     responses={status.HTTP_404_NOT_FOUND: {"description": "`form_not_found`"}},
 )
 async def get_form(tenant_id: TenantId, form_id: uuid.UUID, db: DbSession) -> FormOut:
-    return _out(await _owned(db, tenant_id, form_id))
+    form = await _owned(db, tenant_id, form_id)
+    return _out(form, await in_use(db, form))
+
+
+@router.put(
+    "/{form_id}",
+    summary="Change a form: the whole of it, as when it was created",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "`form_not_found`"},
+        status.HTTP_409_CONFLICT: {
+            "description": "`form_in_use`: in use, it may only take more than it took; "
+            "with `field` or `credential` beside the code when one of them says why"
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "As creating it"},
+    },
+)
+async def update_form(
+    tenant_id: TenantId, form_id: uuid.UUID, body: FormIn, db: DbSession
+) -> FormOut:
+    form = await _owned(db, tenant_id, form_id)
+    if not body.fields and not body.credentials:
+        raise _refuse("fields_required")
+    found = await trust_anchor.load(db, tenant_id)
+    fields = _fields(body.fields, found.fields)
+    credentials = await form_credentials.stored(db, found.types, body.credentials, tenant_id)
+    await _languages(db, tenant_id, body)
+    used = await in_use(db, form)
+    if used:
+        wrong = _takes_less(form, fields, credentials)
+        if wrong is not None:
+            which, index = wrong
+            if which == "field":
+                raise Refusal(status.HTTP_409_CONFLICT, "form_in_use", field=index)
+            if which == "credential":
+                raise Refusal(status.HTTP_409_CONFLICT, "form_in_use", credential=index)
+            raise HTTPException(status.HTTP_409_CONFLICT, detail="form_in_use")
+    form.name = body.name
+    form.description = body.description
+    form.fields = fields
+    form.credentials = credentials
+    await db.commit()
+    await db.refresh(form)
+    return _out(form, used)
+
+
+@router.delete(
+    "/{form_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a form no offer puts and nothing was made with",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "`form_not_found`"},
+        status.HTTP_409_CONFLICT: {"description": "`form_in_use`"},
+    },
+)
+async def delete_form(tenant_id: TenantId, form_id: uuid.UUID, db: DbSession) -> Response:
+    form = await _owned(db, tenant_id, form_id)
+    if await in_use(db, form):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="form_in_use")
+    await db.delete(form)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

@@ -140,3 +140,11 @@ def dns() -> Dns:
     fake = Dns()
     app.dependency_overrides[get_txt_lookup] = lambda: fake.lookup
     return fake
+
+
+async def bilingual(client: AsyncClient, headers: dict[str, str], tenant: str) -> None:
+    """The tenant works in English and Spanish (it starts in its creator's one)."""
+    response = await client.patch(
+        f"/api/v1/tenants/{tenant}", json={"languages": ["en", "es"]}, headers=headers
+    )
+    assert response.status_code == 200, response.text

@@ -8,17 +8,16 @@ admins grant and end them by hand: they list every other tenant — an
 `not_admin` from a member who is not one).
 """
 
-import base64
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import entitlements
+from registry_api import entitlements, paging
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.members import admin_of
@@ -87,20 +86,6 @@ class AccountPage(BaseModel):
     next_cursor: str | None
 
 
-def _encode(tenant: Tenant) -> str:
-    raw = f"{tenant.created_at.isoformat()}|{tenant.id}"
-    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
-
-
-def _decode(cursor: str) -> tuple[datetime, uuid.UUID]:
-    try:
-        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
-        moment, tenant_id = raw.split("|")
-        return datetime.fromisoformat(moment), uuid.UUID(tenant_id)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_cursor") from None
-
-
 async def _account(db: AsyncSession, tenant: Tenant) -> AccountOut:
     members = await db.scalar(
         select(func.count()).select_from(TenantMember).where(TenantMember.tenant_id == tenant.id)
@@ -128,8 +113,8 @@ async def _account(db: AsyncSession, tenant: Tenant) -> AccountOut:
 async def list_accounts(
     tenant_id: AnchorAdmin,
     db: DbSession,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    cursor: Annotated[str | None, Query(max_length=200)] = None,
+    limit: paging.Limit = 20,
+    cursor: paging.Cursor = None,
     q: Annotated[str | None, Query(max_length=100)] = None,
     subscribed: Annotated[
         Literal["yes", "no"] | None,
@@ -150,10 +135,7 @@ async def list_accounts(
         held = select(Subscription.tenant_id)
         query = query.where(Tenant.id.in_(held) if subscribed == "yes" else Tenant.id.not_in(held))
     if cursor:
-        moment, last = _decode(cursor)
-        query = query.where(
-            or_(Tenant.created_at < moment, and_(Tenant.created_at == moment, Tenant.id < last))
-        )
+        query = query.where(paging.after(Tenant.created_at, Tenant.id, cursor))
     rows = list(
         await db.scalars(
             query.order_by(Tenant.created_at.desc(), Tenant.id.desc()).limit(limit + 1)
@@ -163,7 +145,7 @@ async def list_accounts(
     rows = rows[:limit]
     return AccountPage(
         items=[await _account(db, row) for row in rows],
-        next_cursor=_encode(rows[-1]) if more else None,
+        next_cursor=paging.encode(rows[-1].created_at, rows[-1].id) if more else None,
     )
 
 

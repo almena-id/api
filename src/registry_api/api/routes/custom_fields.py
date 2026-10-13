@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import entitlements, trust_anchor
+from registry_api import entitlements, patterns, texts, trust_anchor
 from registry_api import field_catalog as catalog
 from registry_api.api.routes.auth import DbSession
 from registry_api.api.routes.directory import TenantId
@@ -130,6 +130,18 @@ def _refuse(code: str) -> HTTPException:
     return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=code)
 
 
+async def _languages(
+    db: AsyncSession, tenant_id: uuid.UUID, body: CustomFieldIn | CustomFieldPatch
+) -> None:
+    """The labels sent, the field's and its options', in the tenant's languages."""
+    await texts.enabled_only(
+        db,
+        tenant_id,
+        body.labels,
+        *(option.labels for option in body.options or []),
+    )
+
+
 def _labels(labels: dict[str, str], code: str, every: bool = False) -> dict[str, str]:
     """The labels in the portal's languages, trimmed; at least one, or `every`
     one of them."""
@@ -178,10 +190,8 @@ def _definition(
         raise _refuse("constraint_invalid")
     if "pattern" in given:
         pattern = given["pattern"].strip()
-        try:
-            re.compile(pattern)
-        except re.error:
-            raise _refuse("pattern_invalid") from None
+        if not patterns.valid(pattern):
+            raise _refuse("pattern_invalid")
         given["pattern"] = pattern
     if kind in ("code", "codes") and "domain" in given:
         # One of the anchor's value domains, whole; file formats are a file's.
@@ -285,6 +295,7 @@ async def create_field(tenant_id: TenantId, body: CustomFieldIn, db: DbSession) 
     elif body.category is not None or body.source is not None:
         raise _refuse("anchor_only")
     definition = _definition(body, body.type, found)
+    await _languages(db, tenant_id, body)
     exists = await db.scalar(
         select(CatalogField.id).where(
             CatalogField.tenant_id == tenant_id, CatalogField.key == body.key
@@ -427,6 +438,7 @@ async def update_field(
         ):
             raise HTTPException(status.HTTP_409_CONFLICT, detail="field_in_use")
         item.type, item.definition = kind, definition
+    await _languages(db, tenant_id, body)
     await db.commit()
     await db.refresh(item)
     return _out(item, found.domains, anchor)

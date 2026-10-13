@@ -83,11 +83,15 @@ def _issuers_signer(issuer: Issuer, user_id: uuid.UUID) -> bool:
 
 async def _identities(db: AsyncSession, tenant_id: uuid.UUID, signs: bool) -> list[Pending]:
     did_url = get_settings().did_url
-    found = await db.scalars(
-        select(Identity)
-        .where(Identity.tenant_id == tenant_id)
-        .order_by(Identity.created_at, Identity.id)
+    found = list(
+        await db.scalars(
+            select(Identity)
+            .where(Identity.tenant_id == tenant_id)
+            .order_by(Identity.created_at, Identity.id)
+        )
     )
+    # Every log in one query; what the tenant's identities share is kept (`memo`).
+    await dids.prefetch_logs(db, [identity.id for identity in found])
     rows = []
     for identity in found:
         state = await dids.status_of(db, did_url, identity)

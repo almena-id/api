@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.28.1",
     "pydantic-settings>=2.15.0",
     "pyjwt[crypto]>=2.10",
+    "regex>=2026.9.29",
     "scalar-fastapi>=1.9.1",
     "sqlalchemy[asyncio]>=2.1.1",
 ]
@@ -32,6 +33,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.9",
+    "types-regex>=2026.9.29.20261005",
 ]
 
 [tool.ruff]

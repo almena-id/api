@@ -12,20 +12,20 @@ portal can keep scrolling however long they grow; each page also says how many
 there are in all.
 """
 
-import base64
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import dids, logs, mediators, texts
+from registry_api import custody, dids, logs, mediators, paging, texts
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.config import get_settings
 from registry_api.models import (
+    DidLogEntry,
     Identity,
     Issuer,
     Mediator,
@@ -34,6 +34,7 @@ from registry_api.models import (
     TenantMember,
     Verifier,
 )
+from registry_api.vault import Vault, get_vault
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["directory"])
 
@@ -51,8 +52,9 @@ async def member_tenant(tenant_id: uuid.UUID, session: CurrentSession, db: DbSes
 
 
 TenantId = Annotated[uuid.UUID, Depends(member_tenant)]
-Limit = Annotated[int, Query(ge=1, le=100)]
-Cursor = Annotated[str | None, Query(max_length=200)]
+VaultDep = Annotated[Vault, Depends(get_vault)]
+Limit = paging.Limit
+Cursor = paging.Cursor
 
 
 def _clean(value: str | None) -> str | None:
@@ -225,20 +227,6 @@ class Page(BaseModel):
     total: int
 
 
-def _encode(item: Item) -> str:
-    raw = f"{item.created_at.isoformat()}|{item.id}"
-    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
-
-
-def _decode(cursor: str) -> tuple[datetime, uuid.UUID]:
-    try:
-        raw = base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)).decode()
-        moment, item_id = raw.split("|")
-        return datetime.fromisoformat(moment), uuid.UUID(item_id)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_cursor") from None
-
-
 def _out(item: Item, used_by: list[Use] | None = None) -> ItemOut:
     identity = mediator = None
     if isinstance(item, Issuer | Verifier | Mediator):
@@ -291,14 +279,7 @@ async def _page(
     owned: Any = model.tenant_id == tenant_id
     query = select(model).where(owned)
     if cursor:
-        moment, item_id = _decode(cursor)
-        # Keyset paging: strictly after the last one seen, in (created_at, id) order.
-        query = query.where(
-            or_(
-                model.created_at < moment,
-                and_(model.created_at == moment, model.id < item_id),
-            )
-        )
+        query = query.where(paging.after(model.created_at, model.id, cursor))
     rows = cast(
         list[Item],
         list(
@@ -312,6 +293,10 @@ async def _page(
     rows = rows[:limit]
     uses = await _uses(db, [r.id for r in rows]) if model is Identity else {}
     did_url = get_settings().did_url
+    # Every row's log in one query; what the tenant's rows share is kept (`memo`).
+    await dids.prefetch_logs(
+        db, [row.id if isinstance(row, Identity) else row.identity_id for row in rows]
+    )
     items = []
     for row in rows:
         item = _out(row, uses.get(row.id) if model is Identity else None)
@@ -320,17 +305,19 @@ async def _page(
         items.append(item)
     return Page(
         items=items,
-        next_cursor=_encode(rows[-1]) if more else None,
+        next_cursor=paging.encode(rows[-1].created_at, rows[-1].id) if more else None,
         total=total,
     )
 
 
-async def _create(db: DbSession, item: Item) -> ItemOut:
+async def _create(db: DbSession, vault: Vault, item: Item) -> ItemOut:
     # Stamped here rather than by the database, to the microsecond, so the
     # (created_at, id) order the cursor walks is the order of creation.
     item.created_at = datetime.now(UTC)
     db.add(item)
     await db.commit()
+    # Under the flow `none` its DID is signed now, by the platform.
+    await custody.settle(db, vault, item.tenant_id)
     await db.refresh(item)
     if isinstance(item, Issuer | Verifier):
         await db.refresh(item, ["identity", "mediator"])
@@ -391,13 +378,22 @@ async def list_issuers(
     "/issuers",
     status_code=status.HTTP_201_CREATED,
     summary="Register an issuer",
-    responses={422: {"description": "`mediator_not_found`: neither the tenant's nor a public one"}},
+    responses={
+        422: {
+            "description": "`mediator_not_found`: neither the tenant's nor a public one; "
+            "`language_not_enabled`: a description in a language the tenant does not work in"
+        }
+    },
 )
-async def create_issuer(tenant_id: TenantId, body: DescribedIn, db: DbSession) -> ItemOut:
+async def create_issuer(
+    tenant_id: TenantId, body: DescribedIn, db: DbSession, vault: VaultDep
+) -> ItemOut:
+    await texts.enabled_only(db, tenant_id, body.description)
     mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
     identity_id = await _identity_for(db, tenant_id, body.name)
     return await _create(
         db,
+        vault,
         Issuer(
             tenant_id=tenant_id,
             name=body.name,
@@ -419,13 +415,22 @@ async def list_verifiers(
     "/verifiers",
     status_code=status.HTTP_201_CREATED,
     summary="Register a verifier",
-    responses={422: {"description": "`mediator_not_found`: neither the tenant's nor a public one"}},
+    responses={
+        422: {
+            "description": "`mediator_not_found`: neither the tenant's nor a public one; "
+            "`language_not_enabled`: a description in a language the tenant does not work in"
+        }
+    },
 )
-async def create_verifier(tenant_id: TenantId, body: DescribedIn, db: DbSession) -> ItemOut:
+async def create_verifier(
+    tenant_id: TenantId, body: DescribedIn, db: DbSession, vault: VaultDep
+) -> ItemOut:
+    await texts.enabled_only(db, tenant_id, body.description)
     mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
     identity_id = await _identity_for(db, tenant_id, body.name)
     return await _create(
         db,
+        vault,
         Verifier(
             tenant_id=tenant_id,
             name=body.name,
@@ -464,16 +469,22 @@ def _rename(item: Issuer | Verifier | Mediator, name: str | None) -> None:
 
 
 async def _update_described(
-    db: DbSession, item: Issuer | Verifier, tenant_id: uuid.UUID, body: DescribedPatch
+    db: DbSession,
+    vault: Vault,
+    item: Issuer | Verifier,
+    tenant_id: uuid.UUID,
+    body: DescribedPatch,
 ) -> ItemDetail:
     sent = body.model_fields_set
     if "mediator_id" in sent:
         item.mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
     if "description" in sent:
+        await texts.enabled_only(db, tenant_id, body.description)
         item.description = body.description
     if "name" in sent:
         _rename(item, body.name)
     await db.commit()
+    await custody.settle(db, vault, tenant_id)
     await db.refresh(item, ["identity", "mediator"])
     return await item_detail(db, item)
 
@@ -486,13 +497,19 @@ async def get_issuer(tenant_id: TenantId, issuer_id: uuid.UUID, db: DbSession) -
 @router.patch(
     "/issuers/{issuer_id}",
     summary="Change an issuer's name, description or mediator (its DID stays)",
-    responses={422: {"description": "`name_required`, `mediator_not_found`"}},
+    responses={
+        422: {"description": "`name_required`, `mediator_not_found`, `language_not_enabled`"}
+    },
 )
 async def update_issuer(
-    tenant_id: TenantId, issuer_id: uuid.UUID, body: DescribedPatch, db: DbSession
+    tenant_id: TenantId,
+    issuer_id: uuid.UUID,
+    body: DescribedPatch,
+    db: DbSession,
+    vault: VaultDep,
 ) -> ItemDetail:
     issuer = await _described(db, Issuer, tenant_id, issuer_id)
-    return await _update_described(db, issuer, tenant_id, body)
+    return await _update_described(db, vault, issuer, tenant_id, body)
 
 
 @router.get("/verifiers/{verifier_id}", summary="One verifier, with its DID")
@@ -503,13 +520,19 @@ async def get_verifier(tenant_id: TenantId, verifier_id: uuid.UUID, db: DbSessio
 @router.patch(
     "/verifiers/{verifier_id}",
     summary="Change a verifier's name, description or mediator (its DID stays)",
-    responses={422: {"description": "`name_required`, `mediator_not_found`"}},
+    responses={
+        422: {"description": "`name_required`, `mediator_not_found`, `language_not_enabled`"}
+    },
 )
 async def update_verifier(
-    tenant_id: TenantId, verifier_id: uuid.UUID, body: DescribedPatch, db: DbSession
+    tenant_id: TenantId,
+    verifier_id: uuid.UUID,
+    body: DescribedPatch,
+    db: DbSession,
+    vault: VaultDep,
 ) -> ItemDetail:
     verifier = await _described(db, Verifier, tenant_id, verifier_id)
-    return await _update_described(db, verifier, tenant_id, body)
+    return await _update_described(db, vault, verifier, tenant_id, body)
 
 
 @router.get("/mediators", summary="The tenant's mediators, newest first")
@@ -530,11 +553,14 @@ async def list_mediators(
         }
     },
 )
-async def create_mediator(tenant_id: TenantId, body: MediatorIn, db: DbSession) -> ItemOut:
+async def create_mediator(
+    tenant_id: TenantId, body: MediatorIn, db: DbSession, vault: VaultDep
+) -> ItemOut:
     url = await _address(db, tenant_id, body.subdomain, body.domain_id)
     identity_id = await _identity_for(db, tenant_id, body.name)
     return await _create(
         db,
+        vault,
         Mediator(
             tenant_id=tenant_id,
             name=body.name,
@@ -568,7 +594,11 @@ async def get_mediator(tenant_id: TenantId, mediator_id: uuid.UUID, db: DbSessio
     },
 )
 async def update_mediator(
-    tenant_id: TenantId, mediator_id: uuid.UUID, body: MediatorPatch, db: DbSession
+    tenant_id: TenantId,
+    mediator_id: uuid.UUID,
+    body: MediatorPatch,
+    db: DbSession,
+    vault: VaultDep,
 ) -> ItemDetail:
     mediator = await _mediator(db, tenant_id, mediator_id)
     sent = body.model_fields_set
@@ -580,6 +610,7 @@ async def update_mediator(
     if "name" in sent:
         _rename(mediator, body.name)
     await db.commit()
+    await custody.settle(db, vault, tenant_id)
     await db.refresh(mediator, ["identity"])
     return await item_detail(db, mediator)
 
@@ -652,5 +683,60 @@ async def get_identity(
 
 
 @router.post("/identities", status_code=status.HTTP_201_CREATED, summary="Register an identity")
-async def create_identity(tenant_id: TenantId, body: NamedIn, db: DbSession) -> ItemOut:
-    return await _create(db, Identity(tenant_id=tenant_id, name=body.name))
+async def create_identity(
+    tenant_id: TenantId, body: NamedIn, db: DbSession, vault: VaultDep
+) -> ItemOut:
+    return await _create(db, vault, Identity(tenant_id=tenant_id, name=body.name))
+
+
+async def _identity(db: DbSession, tenant_id: uuid.UUID, identity_id: uuid.UUID) -> Identity:
+    identity = await db.get(Identity, identity_id)
+    if identity is None or identity.tenant_id != tenant_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="identity_not_found")
+    return identity
+
+
+@router.patch(
+    "/identities/{identity_id}",
+    summary="Rename an identity (its DID stays; whatever acts as it keeps its own name)",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "`identity_not_found`"}},
+)
+async def rename_identity(
+    tenant_id: TenantId, identity_id: uuid.UUID, body: NamedIn, db: DbSession
+) -> IdentityDetail:
+    identity = await _identity(db, tenant_id, identity_id)
+    identity.name = body.name
+    await db.commit()
+    return await get_identity(tenant_id, identity_id, db)
+
+
+@router.delete(
+    "/identities/{identity_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete an identity nothing acts as and nobody has signed (admins only)",
+    responses={
+        status.HTTP_403_FORBIDDEN: {"description": "`not_admin`"},
+        status.HTTP_404_NOT_FOUND: {"description": "`identity_not_found`"},
+        status.HTTP_409_CONFLICT: {
+            "description": "`identity_in_use`: the tenant, an issuer, verifier or mediator "
+            "acts as it; `identity_signed`: its DID exists, and those who resolve it rely on it"
+        },
+    },
+)
+async def delete_identity(
+    tenant_id: TenantId, identity_id: uuid.UUID, session: CurrentSession, db: DbSession
+) -> Response:
+    member = await db.get(TenantMember, (tenant_id, session.user_id))
+    if member is None or member.role != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_admin")
+    identity = await _identity(db, tenant_id, identity_id)
+    if (await _uses(db, [identity.id]))[identity.id]:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="identity_in_use")
+    signed = await db.scalar(
+        select(DidLogEntry.id).where(DidLogEntry.identity_id == identity.id).limit(1)
+    )
+    if identity.did is not None or signed is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="identity_signed")
+    await db.delete(identity)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

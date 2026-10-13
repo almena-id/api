@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 import pytest
@@ -31,7 +32,9 @@ async def test_a_domain_is_added_proved_and_named_in_the_did(
     added = await _add(client, headers, base, "https://Acme.com/about")
     assert added["domain"] == "acme.com" and added["verified"] is False
     record = added["dns_record"]
-    assert record["name"] == "_almena.acme.com" and record["value"].startswith("almena-verify=")
+    # A name of the tenant's own.
+    assert re.fullmatch(r"_almena-ten_[a-z0-9]{12}\.acme\.com", record["name"])
+    assert record["value"].startswith("almena-verify=")
     again = await client.post(base, json={"domain": "acme.com"}, headers=headers)
     assert again.status_code == 409 and again.json()["detail"] == "domain_exists"
     bad = await client.post(base, json={"domain": "not a domain"}, headers=headers)
@@ -185,5 +188,40 @@ async def test_a_domain_linked_again_keeps_its_record(
     # Another tenant linking the same domain gets a record of its own.
     bob, other = await _sign_in(client, outbox, "bob@globex.com")
     theirs = await _add(client, bob, f"/api/v1/tenants/{other}/domains", "acme.com")
-    assert theirs["dns_record"]["name"] == first["dns_record"]["name"]
+    assert theirs["dns_record"]["name"] != first["dns_record"]["name"]
     assert theirs["dns_record"]["value"] != first["dns_record"]["value"]
+
+
+async def test_two_tenants_prove_the_same_domain(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
+    ada, ada_tenant = await _sign_in(client, outbox, "ada@acme.com")
+    bob, bob_tenant = await _sign_in(client, outbox, "bob@acme.com")
+    mine = await _add(client, ada, f"/api/v1/tenants/{ada_tenant}/domains", "acme.com")
+    theirs = await _add(client, bob, f"/api/v1/tenants/{bob_tenant}/domains", "acme.com")
+    assert mine["dns_record"]["name"] != theirs["dns_record"]["name"]
+    assert mine["dns_record"]["value"] != theirs["dns_record"]["value"]
+    for headers, tenant, added in ((ada, ada_tenant, mine), (bob, bob_tenant, theirs)):
+        dns.records[added["dns_record"]["name"]] = [added["dns_record"]["value"]]
+        checked = await client.post(
+            f"/api/v1/tenants/{tenant}/domains/{added['id']}/check", headers=headers
+        )
+        assert checked.json()["verified"] is True
+    # One tenant's record proves nothing for the other.
+    dns.records[theirs["dns_record"]["name"]] = [mine["dns_record"]["value"]]
+    refused = await client.post(
+        f"/api/v1/tenants/{bob_tenant}/domains/{theirs['id']}/check", headers=bob
+    )
+    assert refused.json()["detail"] == "dns_record_not_found"
+
+
+async def test_the_first_shared_name_still_proves_it(
+    client: AsyncClient, outbox: Outbox, dns: Dns
+) -> None:
+    headers, tenant = await _sign_in(client, outbox, "ada@acme.com")
+    added = await _add(client, headers, f"/api/v1/tenants/{tenant}/domains", "acme.com")
+    dns.records["_almena.acme.com"] = ["something-else", added["dns_record"]["value"]]
+    checked = await client.post(
+        f"/api/v1/tenants/{tenant}/domains/{added['id']}/check", headers=headers
+    )
+    assert checked.json()["verified"] is True

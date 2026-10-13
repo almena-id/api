@@ -183,7 +183,7 @@ async def test_the_issuers_signer_issues_and_the_holder_receives_it(
         headers=headers,
     )
     assert missing.status_code == 422
-    assert missing.json()["detail"]["errors"] == {
+    assert missing.json()["errors"] == {
         "family_name": "required",
         "organization_name": "required",
         "member_number": "required",

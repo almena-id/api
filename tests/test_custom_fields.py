@@ -2,7 +2,7 @@ from typing import Any
 
 from httpx import AsyncClient
 
-from tests.conftest import Outbox
+from tests.conftest import Outbox, bilingual
 from tests.subscriptions import paid_sign_in
 
 CAMPUS: dict[str, Any] = {
@@ -28,6 +28,7 @@ async def test_a_tenant_adds_its_own_fields_and_forms_use_them(
     client: AsyncClient, outbox: Outbox
 ) -> None:
     headers, tenant = await paid_sign_in(client, outbox, "ada@acme.com")
+    await bilingual(client, headers, tenant)
     base = f"/api/v1/tenants/{tenant}/fields"
     assert (await client.get(base, headers=headers)).json() == []
 
@@ -99,7 +100,7 @@ async def test_a_tenant_adds_its_own_fields_and_forms_use_them(
             json={"name": {"en": "X"}, "fields": fields},
             headers=headers,
         )
-        assert bad.status_code == 422 and bad.json()["detail"] == {"code": detail, "field": 0}
+        assert bad.status_code == 422 and bad.json() == {"detail": detail, "field": 0}
 
     # A field a form uses stays; one no form uses goes.
     used = await client.delete(f"{base}/{campus['id']}", headers=headers)
@@ -118,7 +119,7 @@ async def test_a_tenant_adds_its_own_fields_and_forms_use_them(
         headers=eve,
     )
     assert theirs.status_code == 422
-    assert theirs.json()["detail"] == {"code": "field_unknown", "field": 0}
+    assert theirs.json() == {"detail": "field_unknown", "field": 0}
 
 
 async def test_a_custom_field_must_hold(client: AsyncClient, outbox: Outbox) -> None:

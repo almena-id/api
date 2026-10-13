@@ -1,12 +1,16 @@
 import hashlib
 import time
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import jwt
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import webvh
+from registry_api.models import Application
 from tests.conftest import Outbox
 from tests.fake_wallet import FakeWallet
 from tests.test_presentations import Issuer, _issuer, sd_jwt
@@ -187,8 +191,8 @@ async def test_a_holder_applies_and_the_issuer_decides(client: AsyncClient, outb
         headers=secret,
     )
     assert bad.status_code == 422
-    assert bad.json()["detail"] == {
-        "code": "answers_invalid",
+    assert bad.json() == {
+        "detail": "answers_invalid",
         "errors": {"birthdate": "range", "address.country": "required", "nationalities": "value"},
     }
     incomplete = await client.post(f"{base}/wallet", json={"purpose": "submit"}, headers=secret)
@@ -258,7 +262,8 @@ async def test_a_holder_applies_and_the_issuer_decides(client: AsyncClient, outb
     # The issuer's tenant reads it, checks the signature, and decides.
     inbox = f"/api/v1/tenants/{tenant}/applications"
     listed = (await client.get(inbox, headers=headers)).json()
-    assert [(a["slug"], a["status"]) for a in listed] == [(started["slug"], "submitted")]
+    assert [(a["slug"], a["status"]) for a in listed["items"]] == [(started["slug"], "submitted")]
+    assert listed["next_cursor"] is None
     received = (await client.get(f"{inbox}/{started['id']}", headers=headers)).json()
     assert received["signature_valid"] is True and received["holder_did"] == holder.did
     assert received["content"] == content
@@ -281,7 +286,8 @@ async def test_a_holder_applies_and_the_issuer_decides(client: AsyncClient, outb
     from tests.test_directory import _sign_in
 
     eve, other = await _sign_in(client, outbox, "eve@example.org")
-    assert (await client.get(f"/api/v1/tenants/{other}/applications", headers=eve)).json() == []
+    theirs = await client.get(f"/api/v1/tenants/{other}/applications", headers=eve)
+    assert theirs.json() == {"items": [], "next_cursor": None}
     assert (await client.get(f"{inbox}/{started['id']}", headers=eve)).status_code == 404
 
 
@@ -297,3 +303,51 @@ async def test_an_offer_needs_a_form_of_the_tenants(client: AsyncClient, outbox:
     ):
         refused = await client.put(url, json=body, headers=headers)
         assert refused.status_code == 422 and refused.json()["detail"] == "request_form_invalid"
+
+
+async def test_the_inbox_comes_a_page_at_a_time(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    headers, tenant = await _club_tenant(client, outbox)
+    issuer = (
+        await client.post(
+            f"/api/v1/tenants/{tenant}/issuers", json={"name": "Club"}, headers=headers
+        )
+    ).json()
+    form = (
+        await client.post(
+            f"/api/v1/tenants/{tenant}/forms",
+            json={"name": {"en": "Join"}, "fields": [{"ref": "given_name"}]},
+            headers=headers,
+        )
+    ).json()
+    now = datetime.now(UTC)
+    for index in range(5):
+        db.add(
+            Application(
+                tenant_id=uuid.UUID(tenant),
+                issuer_id=uuid.UUID(issuer["id"]),
+                form_id=uuid.UUID(form["id"]),
+                credential_type="membership",
+                status="submitted",
+                secret_hash=bytes([index]) * 32,
+                wallet_answered=True,
+                answers={},
+                presented=[],
+                submitted_at=now - timedelta(minutes=index),
+                expires_at=now + timedelta(days=1),
+            )
+        )
+    await db.commit()
+    inbox = f"/api/v1/tenants/{tenant}/applications"
+    first = (await client.get(f"{inbox}?limit=2", headers=headers)).json()
+    second = (
+        await client.get(f"{inbox}?limit=2&cursor={first['next_cursor']}", headers=headers)
+    ).json()
+    third = (
+        await client.get(f"{inbox}?limit=2&cursor={second['next_cursor']}", headers=headers)
+    ).json()
+    seen = [a["id"] for page in (first, second, third) for a in page["items"]]
+    assert len(seen) == len(set(seen)) == 5 and third["next_cursor"] is None
+    bad = await client.get(f"{inbox}?cursor=nope", headers=headers)
+    assert bad.status_code == 400 and bad.json()["detail"] == "invalid_cursor"
