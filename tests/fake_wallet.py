@@ -73,15 +73,7 @@ class FakeWallet:
         if request["purpose"] == "sign":
             sign = request["sign"]
             proof = self.proof(sign["document"], sign["verification_method"], sign["proof_purpose"])
-            if sign["kind"] != "endorsement":
-                return {"proof": proof}
-            # The credential just signed goes into the presentation, signed next.
-            presentation = {
-                **sign["presentation"],
-                "verifiableCredential": [{**sign["document"], "proof": proof}],
-            }
-            presented = self.proof(presentation, sign["verification_method"], "authentication")
-            return {"proof": proof, "presentation_proof": presented}
+            return {"proof": proof}
         return {"id_token": self.id_token(request)}
 
 

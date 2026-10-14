@@ -1,49 +1,36 @@
-"""What is done to an issuer, verifier or mediator: publish (whoever signs as
-the tenant), unpublish and delete (admins).
+"""What is done to an issuer, verifier or mediator: publish, unpublish and
+delete (admins).
 
 Publishing is what makes one visible outside its tenant.
 
-Each starts as a draft, seen only by the tenant's members. **Publishing is
-endorsing**: whoever signs as the tenant signs from a wallet the tenant's membership credential
-for it and, in the same approval, its `whois.vp` (see `credentials` and
-`wallet.py`); once both are checked it is published — its DID resolves, the
-catalogue lists it. Under the flow `none` the platform signs both when an
-admin publishes, at once (`custody`). Unpublishing takes all of it back.
+Each starts as a draft, seen only by the tenant's members. Publishing is an
+admin's decision, not a signature: once its own DID and the tenant's are
+signed, it is published — its DID resolves, the catalogue lists it.
+Unpublishing takes it back.
 
-The catalogue — and the endorsement — name the tenant by its DID, never by
-the tenant's own name, which starts as "Tenant of {email}".
+The catalogue names the tenant by its DID, never by the tenant's own name,
+which starts as "Tenant of {email}".
 
 Deleting one deletes its identity too (it is its own, never shared): its DID
-stops resolving for good, and an issuer's or verifier's keys leave the vault.
-A mediator's users are left without one.
+stops resolving for good. A mediator's users are left without one.
 """
 
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select, update
 
-from registry_api import credentials, custody, dids, messaging_keys, paging, signing_flows
-from registry_api.api.routes.auth import CurrentSession, DbSession
-from registry_api.api.routes.directory import ItemDetail, TenantId, item_detail
+from registry_api import paging
+from registry_api.api.routes.auth import DbSession
+from registry_api.api.routes.directory import ItemDetail, item_detail
 from registry_api.api.routes.members import admin_of
-from registry_api.api.routes.wallet import (
-    LocaleIn,
-    RequestOut,
-    SignedOut,
-    SignObject,
-    endorse,
-    my_keys,
-    new_sign_request,
-)
 from registry_api.broker import Broker, BrokerError, get_broker
 from registry_api.models import Identity, Issuer, Mediator, Tenant, Verifier
 from registry_api.trust_anchor import PREFIX
-from registry_api.vault import Vault, VaultError, get_vault
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +59,6 @@ async def _owned(
 
 async def _unpublish(db: DbSession, item: Publishable) -> ItemDetail:
     item.published_at = None
-    identity = await db.get_one(Identity, item.identity_id)
-    identity.presentation = None
-    identity.endorsed_until = None
     await db.commit()
     await db.refresh(
         item, ["identity", "mediator"] if not isinstance(item, Mediator) else ["identity"]
@@ -84,112 +68,35 @@ async def _unpublish(db: DbSession, item: Publishable) -> ItemDetail:
 
 @router.post(
     "/{kind}/{item_id}/publish",
-    summary="Publish an issuer, verifier or mediator by endorsing it: a request for the "
-    "signer's wallet to sign the tenant's membership credential and the item's whois.vp "
-    "or, under the flow `none`, both signed by the platform at once "
-    '(`{status: "signed"}`); publishing again renews it',
+    summary="Publish an issuer, verifier or mediator: its DID resolves, the catalogue lists it",
     responses={
-        403: {"description": "`not_a_signer`: no wallet of theirs signs for it"},
+        403: {"description": "`not_admin`"},
         409: {
             "description": "`identity_pending`: its identity is not signed yet; "
-            "`identity_outdated`: its published document does not name the admin's key yet; "
-            "`tenant_pending`: the tenant's DID is not signed yet; "
-            "`tenant_outdated`: under `none`, the tenant's DID or the item's does not name "
-            "the platform's key yet (the old flow's signers hand over first)"
+            "`tenant_pending`: the tenant's DID is not signed yet"
         },
-        503: {"description": "`vault_unavailable`: the platform could not sign"},
     },
 )
 async def publish(
-    tenant_id: TenantId,
-    kind: Kind,
-    item_id: uuid.UUID,
-    body: LocaleIn,
-    session: CurrentSession,
-    db: DbSession,
-    vault: Annotated[Vault, Depends(get_vault)],
-) -> RequestOut | SignedOut:
+    tenant_id: AdminTenant, kind: Kind, item_id: uuid.UUID, db: DbSession
+) -> ItemDetail:
     item = await _owned(db, kind, tenant_id, item_id)
     identity = await db.get_one(Identity, item.identity_id)
     tenant = await db.get_one(Tenant, tenant_id)
-    # Who the flow names, before anything about the item: a member it does
-    # not name is told so, whatever state the item is in.
-    if not await signing_flows.signs(db, tenant, session.user_id):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
-    # Under `none` whatever waits to be signed is, first: the platform signs it.
-    if tenant.signing_flow == "none":
-        await custody.settle(db, vault, tenant_id)
     owner = await db.get(Identity, tenant.identity_id) if tenant.identity_id else None
     # Nothing is published under a DID that does not exist yet.
     if identity.did is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="identity_pending")
     if owner is None or owner.did is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="tenant_pending")
-    # The key must sign for the tenant (its published `assertionMethod`) and
-    # for the item as its controller (the item's published `authentication`).
-    tenant_keys = set(dids.keys_under(await dids.published(db, owner), "assertionMethod"))
-    item_doc = await dids.published(db, identity) or {}
-    controlling = {
-        str(ref).removeprefix(f"{owner.did}#")
-        for ref in item_doc.get("authentication", [])
-        if str(ref).startswith(f"{owner.did}#")
-    }
-    signers = sorted(tenant_keys & controlling)
-    # Under `none` the platform's key is the one.
-    platform = tenant.platform_key if tenant.signing_flow == "none" else None
-    mine = {platform} if platform else set(await my_keys(db, session.user_id))
-    if not mine & set(signers):
-        # Moving to `none`, the tenant's DID still names the old flow's keys.
-        if platform:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="tenant_outdated")
-        if mine & tenant_keys:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="identity_outdated")
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
-    credential = credentials.membership(
-        issuer=owner.did,
-        subject=identity.did,
-        role=kind[:-1],
-        name=item.name,
-        now=datetime.now(UTC),
+    # Published again, it keeps the first moment.
+    if item.published_at is None:
+        item.published_at = datetime.now(UTC)
+    await db.commit()
+    await db.refresh(
+        item, ["identity", "mediator"] if not isinstance(item, Mediator) else ["identity"]
     )
-    request = SignObject(
-        kind="endorsement",
-        identity=item.name,
-        tenant=tenant.name,
-        did=identity.did,
-        valid_until=credential["validUntil"],
-        signers=signers,
-        verification_method=owner.did,
-        document=credential,
-        presentation={
-            "@context": [credentials.CONTEXT],
-            "type": ["VerifiablePresentation"],
-            "holder": identity.did,
-            "verifiableCredential": [],
-        },
-    )
-    extra = {"kind": kind, "item_id": str(item.id), "identity_id": str(identity.id)}
-    if platform:
-        try:
-            signed = {**credential, "proof": await _signed(vault, tenant, request)}
-            presentation = {**(request.presentation or {}), "verifiableCredential": [signed]}
-            presented = await custody.proof(
-                vault, tenant, presentation, owner.did, "authentication"
-            )
-        except VaultError:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, detail="vault_unavailable"
-            ) from None
-        await endorse(db, extra, request, signed, presented, f"did:key:{platform}")
-        await db.commit()
-        return SignedOut()
-    return await new_sign_request(db, session.user_id, body, request, extra)
-
-
-async def _signed(vault: Vault, tenant: Tenant, request: SignObject) -> dict[str, Any]:
-    return await custody.proof(
-        vault, tenant, request.document, request.verification_method, request.proof_purpose
-    )
+    return await item_detail(db, item)
 
 
 @router.post(
@@ -214,7 +121,6 @@ async def delete(
     kind: Kind,
     item_id: uuid.UUID,
     db: DbSession,
-    vault: Annotated[Vault, Depends(get_vault)],
     broker: Annotated[Broker, Depends(get_broker)],
 ) -> Response:
     item = await _owned(db, kind, tenant_id, item_id)
@@ -236,16 +142,6 @@ async def delete(
     if identity is not None:
         await db.delete(identity)
     await db.commit()
-    # A mediator's users name it no more: under `none` that is signed now.
-    if isinstance(item, Mediator):
-        await custody.settle(db, vault, tenant_id)
-    # After the commit: a key left behind by a vault that failed is harmless
-    # (nothing names it any more); an item left without its key is not.
-    if isinstance(item, Issuer | Verifier):
-        try:
-            await messaging_keys.forget(vault, tenant_id, messaging_keys.kind_of(item), item.id)
-        except VaultError:
-            logger.warning("vault_keys_left", extra={"kind": kind, "item_id": str(item.id)})
     if queued is not None:
         try:
             await broker.remove(*queued)

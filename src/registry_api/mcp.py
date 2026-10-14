@@ -7,10 +7,10 @@ caller's bearer token. So a tool is checked and answered exactly as the route
 is: the same authentication, membership, validation and errors.
 
 Only reads and operations a person can still stop are tools: deleting,
-unpublishing, deciding applications, queue passwords, and the account's own
-ways in, tokens and wallet are left to the portal and the CLI. Operations that end in a
-signature (publishing, signing an identity, issuing) only make the wallet
-request; the signer approves it in their wallet.
+publishing and unpublishing, deciding applications, queue passwords, and the
+account's own ways in, tokens and wallet are left to the portal and the CLI.
+Operations that end in a signature (signing an identity, issuing) only make
+the wallet request; the signer approves it in their wallet.
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26")
 INSTRUCTIONS = (
     "Tools of the Almena ID registry, acting as the account whose API token is used. "
     "Start with list_tenants: almost every other tool takes a tenant_id. Issuers, "
-    "verifiers and mediators are drafts until published. Tools that end in a signature "
-    "(publish, sign_identity, request_issuance_signature, sign_status_list, "
+    "verifiers and mediators are drafts until an admin publishes them. Tools that end "
+    "in a signature (sign_identity, request_issuance_signature, sign_status_list, "
     "set_credential_status) return a wallet request: show "
     "its deep_link to the person who signs as the tenant, who approves it in their "
     "Almena wallet. Errors come back as the API's own, with a code such as "
@@ -98,7 +98,6 @@ TOOLS: tuple[Tool, ...] = (
         "GET",
         f"{T}/verifiers/{{verifier_id}}/verifications/{{verification_id}}",
     ),
-    Tool("publish", "POST", f"{T}/{{kind}}/{{item_id}}/publish"),
     Tool("list_published", "GET", "/api/v1/catalog/{kind}"),
     Tool("list_offers", "GET", "/api/v1/catalog/offers"),
     # Catalogues, fields and forms.

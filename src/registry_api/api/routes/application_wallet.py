@@ -1,7 +1,7 @@
 """The wallet's side of an application: the requests the catalog shows as QR
 codes (pair, present, submit, receive), the wallet reading and answering them
-by ``direct_post``, and collecting an issued credential from the issuer's
-notice. See `routes.applications` for the whole flow."""
+by ``direct_post``, and collecting an issued credential. See
+`routes.applications` for the whole flow."""
 
 import json
 import secrets
@@ -27,7 +27,6 @@ from registry_api import answers as checks
 from registry_api import (
     didcomm,
     form_credentials,
-    notices,
     presentations,
     queues,
     trust_anchor,
@@ -47,7 +46,7 @@ from registry_api.api.routes.applications import (
     view,
 )
 from registry_api.api.routes.auth import DbSession, as_utc
-from registry_api.config import get_settings
+from registry_api.broker import Broker, get_broker
 from registry_api.models import (
     Application,
     Form,
@@ -58,6 +57,12 @@ router = APIRouter(prefix="/applications", tags=["applications"])
 WALLET_TTL = timedelta(minutes=5)
 Purpose = Literal["pair", "present", "submit", "receive"]
 StatusFetch = Annotated[presentations.StatusFetch, Depends(presentations.get_status_fetch)]
+BrokerDep = Annotated[Broker, Depends(get_broker)]
+
+
+def collect_url(item: Application) -> str:
+    """Where the holder's wallet asks to receive the issued credential."""
+    return wallet.channel_url(f"/applications/{item.id}/collect")
 
 
 def _refuse(code: str, status_code: int = status.HTTP_409_CONFLICT) -> HTTPException:
@@ -124,14 +129,13 @@ async def ask_wallet(item: Mine, body: WalletIn, db: DbSession) -> dict[str, Any
 
 class CollectIn(BaseModel):
     # Signed by the holder's key for this issuer (the one it paired with):
-    # audience this very endpoint (the notice's `collect`), nonce the
-    # application's id.
+    # audience this very endpoint, nonce the application's id.
     id_token: str = Field(max_length=8192)
 
 
 @router.post(
     "/{application_id}/collect",
-    summary="The holder's wallet asks to receive its issued credential, from a notice",
+    summary="The holder's wallet asks to receive its issued credential",
     responses={
         status.HTTP_400_BAD_REQUEST: {"description": "`invalid_token`, `invalid_did`"},
         status.HTTP_404_NOT_FOUND: {"description": "`application_not_found`"},
@@ -139,13 +143,13 @@ class CollectIn(BaseModel):
     },
 )
 async def collect(application_id: uuid.UUID, body: CollectIn, db: DbSession) -> dict[str, Any]:
-    """What the `issued` notice points at: the wallet proves it is the holder
-    and gets a `receive` request, answered as the catalog's QR 3 is."""
+    """The wallet proves it is the holder and gets a `receive` request,
+    answered as the catalog's QR 3 is."""
     item = await db.get(Application, application_id)
     if item is None or item.holder_did is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="application_not_found")
     try:
-        did = wallet.verify(body.id_token, audience=notices.collect_url(item), nonce=str(item.id))
+        did = wallet.verify(body.id_token, audience=collect_url(item), nonce=str(item.id))
     except wallet.WalletError as error:
         raise _refuse(error.code, status.HTTP_400_BAD_REQUEST) from None
     if did != item.holder_did:
@@ -160,8 +164,7 @@ async def collect(application_id: uuid.UUID, body: CollectIn, db: DbSession) -> 
     item.wallet_answered = False
     await db.commit()
     return {
-        "request_uri": f"{get_settings().public_url.rstrip('/')}"
-        f"/api/v1/applications/{item.id}/request",
+        "request_uri": wallet.channel_url(f"/applications/{item.id}/request"),
         "deep_link": deep_link(item),
         "expires_at": item.wallet_expires_at.isoformat(),
     }
@@ -203,8 +206,7 @@ async def read_request(application_id: uuid.UUID, db: DbSession) -> dict[str, An
         "response_mode": "direct_post",
         "client_id": client_id(),
         "client_name": issuer.name,
-        "response_uri": f"{get_settings().public_url.rstrip('/')}"
-        f"/api/v1/applications/{item.id}/request/response",
+        "response_uri": wallet.channel_url(f"/applications/{item.id}/request/response"),
         "nonce": item.wallet_nonce,
         "purpose": purpose,
         "expires_at": item.wallet_expires_at.isoformat() if item.wallet_expires_at else None,
@@ -274,7 +276,7 @@ async def answer_request(
     request: Request,
     db: DbSession,
     fetch: StatusFetch,
-    broker: notices.BrokerDep,
+    broker: BrokerDep,
 ) -> Response:
     item = await _asked(db, application_id)
     body = await _answer(request)

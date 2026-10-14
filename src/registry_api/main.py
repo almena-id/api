@@ -23,7 +23,6 @@ from registry_api.broker import close_broker
 from registry_api.config import get_settings
 from registry_api.db import get_engine, get_sessionmaker
 from registry_api.logs import REQUEST_ID_HEADER, RequestContextMiddleware, configure_logging
-from registry_api.vault import close_vault
 
 
 @asynccontextmanager
@@ -34,7 +33,6 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     with suppress(asyncio.CancelledError):
         await sweeping
     await get_engine().dispose()
-    await close_vault()
     await close_broker()
 
 
@@ -66,7 +64,8 @@ def create_app() -> FastAPI:
     # Outermost, so every request, preflights and errors included, gets its id.
     app.add_middleware(RequestContextMiddleware)
     if settings.docs_enabled:
-        add_scalar_reference(app, route="/docs")
+        # Scalar's default favicon is FastAPI's; the tab keeps the API's mark.
+        add_scalar_reference(app, route="/docs", scalar_favicon_url=home.FAVICON)
     app.include_router(home.router)
     app.include_router(health.router)
     app.include_router(did_documents.router)

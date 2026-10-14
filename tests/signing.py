@@ -60,26 +60,12 @@ async def ready(client: AsyncClient, headers: Headers, tenant_id: str) -> FakeWa
 
 
 async def publish(
-    client: AsyncClient,
-    headers: Headers,
-    tenant_id: str,
-    kind: str,
-    item_id: str,
-    wallet: FakeWallet,
+    client: AsyncClient, headers: Headers, tenant_id: str, kind: str, item_id: str
 ) -> dict[str, Any]:
-    """Publishes an item by endorsing it; returns the request the wallet read."""
-    asked = await client.post(
-        f"/api/v1/tenants/{tenant_id}/{kind}/{item_id}/publish", json={}, headers=headers
+    """Publishes an item, as an admin; returns it."""
+    response = await client.post(
+        f"/api/v1/tenants/{tenant_id}/{kind}/{item_id}/publish", headers=headers
     )
-    assert asked.status_code == 200, asked.text
-    body = asked.json()
-    request: dict[str, Any] = (await client.get(body["request_uri"])).json()
-    answered = await client.post(request["response_uri"], json=wallet.answer(request))
-    assert answered.status_code == 204, answered.text
-    result = await client.post(
-        f"/api/v1/auth/wallet/requests/{body['id']}/result",
-        json={"poll": body["poll"]},
-        headers=headers,
-    )
-    assert result.json()["status"] == "signed", result.text
-    return request
+    assert response.status_code == 200, response.text
+    published: dict[str, Any] = response.json()
+    return published

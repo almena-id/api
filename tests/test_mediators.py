@@ -136,7 +136,7 @@ async def test_renaming_and_moving_keep_the_did(
     assert blank.status_code == 422 and blank.json()["detail"] == "name_required"
 
 
-async def test_issuers_route_through_their_mediator(
+async def test_issuers_keep_their_mediator_but_list_no_service(
     client: AsyncClient, outbox: Outbox, dns: Dns
 ) -> None:
     headers, tenant = await _sign_in(client, outbox, "ada@example.org")
@@ -151,9 +151,9 @@ async def test_issuers_route_through_their_mediator(
     issuer = (await client.post(f"{base}/issuers", json=body, headers=headers)).json()
     assert issuer["mediator"] == {"id": mediator["id"], "name": "Relay", "own": True}
     # Both signed and published: a draft's DID does not resolve.
-    await publish(client, headers, tenant, "mediators", str(mediator["id"]), wallet)
+    await publish(client, headers, tenant, "mediators", str(mediator["id"]))
     await sign(client, headers, tenant, issuer["identity"]["id"], wallet)
-    await publish(client, headers, tenant, "issuers", issuer["id"], wallet)
+    await publish(client, headers, tenant, "issuers", issuer["id"])
 
     slug = (
         (await client.get(f"{base}/identities/{issuer['identity']['id']}", headers=headers))
@@ -162,9 +162,8 @@ async def test_issuers_route_through_their_mediator(
     )
     log = (await client.get(f"/ids/{slug}/did.jsonl")).text.splitlines()
     published = json.loads(log[-1])["state"]
-    # Routed through the did:web the mediator answers as, whose document has
-    # its keys; the registry's DID for it names only where it listens.
-    assert published["service"][0]["serviceEndpoint"]["uri"] == "did:web:mediator.example.org"
+    # Nothing is written to it: the platform keeps no key to read it with.
+    assert "service" not in published and "keyAgreement" not in published
     assert did != "did:web:mediator.example.org"
 
     # Without one, nothing to route through.

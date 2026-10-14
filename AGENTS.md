@@ -48,13 +48,9 @@ src/registry_api/
   dids.py            identities' did:webvh DIDs (`{did_url}/ids/{slug}`, almena.id): the document
                      each should publish (built in phases: it names only what exists
                      already), its signed log, the next entry to sign, its status
-  credentials.py     a tenant's membership credential for its issuers, verifiers, mediators
   signing_flows.py   the signing engine: who signs as a tenant, by its flow (`any_admin`,
-                     `single_user`, `none`: nobody, the platform does)
-  custody.py         the platform signing as a tenant under `none`: its Ed25519 key in the vault
-                     (`tenants/{id}/signing`, public half `Tenant.platform_key`), proofs made as
-                     a wallet makes them, and `settle`, which signs every log entry it may — the
-                     routes that change what an identity publishes call it after they commit
+                     `single_user`); the platform keeps no private keys: every signature is
+                     a person's, from their wallet
   credential_catalog.py  what a credential type is (the types are the anchor's data): claims
                      named as catalogue fields, how each format names them (vct, W3C type,
                      mdoc doctype), their claims' JSON Schema and SD-JWT VC Type Metadata
@@ -82,24 +78,18 @@ src/registry_api/
                      tenant's own): types, groups, value domains, narrowing, the JSON Schema
                      an answer meets and the catalogue as served. A new field of Almena's is
                      added by the anchor (`POST …/fields`), never here
-  messaging_keys.py  issuers' and verifiers' messaging keys (X25519): made in the vault when
-                     their signer first signs them, the public half on `Identity.agreement_key`
-                     (their document's `keyAgreement`); deleted with them
-  vault/             the vault keeping the platform's secrets, behind a swappable provider:
-                     base.py (`Vault`, the interface, and portable paths), paths.py (where
-                     each secret lives: `tenants/{tenant_id}/{kind}/{id}/{name}`, by id),
-                     openbao.py (KV v2 + AppRole), memory.py (tests); `get_vault` picks
-                     the provider by `REGISTRY_VAULT_PROVIDER`. A new service is a new
-                     module implementing `Vault`; nothing outside vault/ names a provider
   tenant_health.py   a tenant's health: the checks it must pass to operate (name, mediator,
-                     signing flow) and its score; new checks go here
-  webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked;
-                     made only by `custody`)
-  wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token
-  didcomm.py         DIDComm v2 as an issuer writes to a holder: did:peer:2, a mediator's
-                     did:web document, JWE authcrypt/anoncrypt (X25519, A256CBC-HS512, byte
-                     for byte as almena-didcomm), Routing 2.0 forward, and the `Courier`
-                     that fetches and posts (`get_courier`, overridden in tests)
+                     signing flow) and its score; the root's are its onboarding in order
+                     (name, signing flow, domain, identity, its own mediator: created,
+                     signed, published, chosen), each with the item it is done on; new
+                     checks go here
+  webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked)
+  wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token;
+                     `channel_url`: every address the wallet reads or answers (sign-in, sign,
+                     applications, collect, verifications) is on the identity domain
+                     (`did_url`), since the wallet's key follows the origin it reads from
+  didcomm.py         reading the did:peer:2 a holder's wallet names at pairing (kept on the
+                     application; nothing is sent to it)
   broker/            the message broker issuers' and verifiers' back offices read from:
                      base.py (`Broker`: declare a queue, grant its read-only user,
                      remove both, publish), rabbitmq.py (the management HTTP API),
@@ -107,9 +97,6 @@ src/registry_api/
   queues.py          what goes into an issuer's queue (`subject.{slug}`): applications
                      submitted, decided, issued, and credential status changes; never a
                      condition for what happened
-  notices.py         telling the holder over DIDComm how its application stands (accepted,
-                     rejected, issued): the message, sent from the issuer's DID; never a
-                     condition for the decision or the issuance
   mcp.py             the MCP tools: each one a route of the API (`TOOLS`: name, method,
                      path), its input schema built from that route's OpenAPI operation, called
                      in process with the caller's bearer token; a new tool is a line there
@@ -132,7 +119,8 @@ src/registry_api/
                      directory.py: a tenant's issuers, verifiers, mediators, identities;
                      pending.py: what waits in a tenant to be signed or published, in
                      the order it is done, what blocks each and whether it is the asker's;
-                     publication.py: publishing them (the tenant's signers; unpublishing, admins) and the public catalogue;
+                     publication.py: publishing and unpublishing them (admins, no signature: once its
+                     DID and the tenant's are signed) and the public catalogue;
                      signing.py: an issuer's or verifier's signing system (admins set it)
                      queues.py: an issuer's or verifier's queue at the broker (admins make,
                      rotate and delete it; its password shown once)
@@ -179,7 +167,7 @@ src/registry_api/
                      applications.py: holders applying for an offer (no account: a
                      secret): start, answers, files and what they sign;
                      application_wallet.py: the wallet's pair/present/submit/receive
-                     requests on the sign-in channel, and collecting from a notice;
+                     requests on the sign-in channel, and collecting an issued credential;
                      offers.py: the public offers (`/catalog/offers`, one by one);
                      inbox.py: the issuer's inbox, a page at a time, and deciding;
                      fields.py: the field and credential catalogues, public (`/catalog/fields`,
@@ -194,8 +182,6 @@ src/registry_api/
                      mcp.py: the MCP endpoint at `/mcp` (outside /api/v1; JSON-RPC, stateless)
   models/            SQLAlchemy models; import each one in models/__init__.py
 migrations/          Alembic (env.py reads the settings and models)
-openbao/             OpenBao under Compose: config.hcl (Raft storage, audit to stdout) and
-                     setup.sh, the API's mount, policy and AppRole (`task openbao:setup`)
 tests/               pytest (async, httpx ASGITransport)
 ```
 

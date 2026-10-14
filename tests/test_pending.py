@@ -1,5 +1,4 @@
 import uuid
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -7,10 +6,10 @@ from httpx import AsyncClient
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api.models import Identity, StatusList
+from registry_api.models import StatusList
 from tests.conftest import Outbox
 from tests.fake_wallet import FakeWallet
-from tests.signing import link_wallet, publish, ready, sign
+from tests.signing import link_wallet, publish, sign
 from tests.test_directory import _sign_in
 from tests.test_issuance import _accepted, sign_status_list
 
@@ -59,7 +58,7 @@ async def test_what_waits_comes_in_the_order_it_is_done(
         ("issuer", "publish", "draft", None, True),
     ]
 
-    await publish(client, headers, tenant, "issuers", issuer["id"], wallet)
+    await publish(client, headers, tenant, "issuers", issuer["id"])
     assert (await client.get(url, headers=headers)).json() == []
 
 
@@ -78,34 +77,6 @@ async def test_it_says_whose_it_is(client: AsyncClient, outbox: Outbox) -> None:
     other, _ = await _sign_in(client, outbox, "eve@example.org")
     refused = await client.get(f"/api/v1/tenants/{tenant}/pending", headers=other)
     assert refused.status_code == 404
-
-
-async def test_an_expired_endorsement_is_published_again(
-    client: AsyncClient, outbox: Outbox, db: AsyncSession
-) -> None:
-    headers, tenant = await _sign_in(client, outbox, "ada@example.org")
-    base = f"/api/v1/tenants/{tenant}"
-    wallet = await ready(client, headers, tenant)
-    verifier = (
-        await client.post(f"{base}/verifiers", json={"name": "Desk"}, headers=headers)
-    ).json()
-    await sign(client, headers, tenant, verifier["identity"]["id"], wallet)
-    await publish(client, headers, tenant, "verifiers", verifier["id"], wallet)
-    assert (await client.get(f"{base}/pending", headers=headers)).json() == []
-
-    await db.execute(
-        update(Identity)
-        .where(Identity.id == uuid.UUID(verifier["identity"]["id"]))
-        .values(endorsed_until=datetime.now(UTC) - timedelta(days=1))
-    )
-    await db.commit()
-    pending = (await client.get(f"{base}/pending", headers=headers)).json()
-    assert _rows(pending) == [("verifier", "publish", "expired", None, True)]
-    assert pending[0]["id"] == verifier["id"]
-
-    # Publishing again renews it.
-    await publish(client, headers, tenant, "verifiers", verifier["id"], wallet)
-    assert (await client.get(f"{base}/pending", headers=headers)).json() == []
 
 
 async def test_credentials_wait_for_their_status_list(client: AsyncClient, outbox: Outbox) -> None:

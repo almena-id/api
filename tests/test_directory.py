@@ -177,29 +177,18 @@ async def test_an_identity_shows_its_did_document(
     did = detail["did"]
     assert did.startswith("did:webvh:Qm") and f":{host}:ids:idn_" in did
     assert detail["signature"] == "signed"
-    # Its tenant controls it, and presents for it with its admins' keys; the
-    # messaging key made when it was signed is what messages are encrypted to.
+    # Its tenant controls it, and presents for it with its admins' keys; it
+    # lists no key to write to it with: the platform keeps none.
     key = wallet.did.removeprefix("did:key:")
-    agreement = detail["document"]["keyAgreement"][0].removeprefix(f"{did}#")
-    assert agreement.startswith("z6LS")
     assert detail["document"] == {
-        "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
+        "@context": ["https://www.w3.org/ns/did/v1"],
         "id": did,
         "controller": tenant_did,
-        "verificationMethod": [
-            {
-                "id": f"{did}#{agreement}",
-                "type": "Multikey",
-                "controller": did,
-                "publicKeyMultibase": agreement,
-            }
-        ],
         "authentication": [f"{tenant_did}#{key}"],
-        "keyAgreement": [f"{did}#{agreement}"],
     }
 
     # Public once published: the log, and the document under its did:web name.
-    await publish(client, headers, tenant, "issuers", issuer["id"], wallet)
+    await publish(client, headers, tenant, "issuers", issuer["id"])
     slug = did.rsplit(":", 1)[1]
     assert detail["log_url"] == f"{get_settings().did_url}/ids/{slug}/did.jsonl"
     log = await client.get(f"/ids/{slug}/did.jsonl")
@@ -213,17 +202,15 @@ async def test_an_identity_shows_its_did_document(
     assert web.json()["alsoKnownAs"] == [did]
 
     # A change to what it should publish waits for a signature.
-    mediator = await new_mediator(client, headers, tenant, dns)
-    await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
-    await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
-    patch = {"mediator_id": mediator["id"]}
-    await client.patch(f"{base}/issuers/{issuer['id']}", json=patch, headers=headers)
+    members = (await client.get(f"{base}/members", headers=headers)).json()
+    body = {"system": "single_user", "user_id": members[0]["user_id"]}
+    await client.put(f"{base}/issuers/{issuer['id']}/signing", json=body, headers=headers)
     outdated = (await client.get(identity_url, headers=headers)).json()
     assert outdated["signature"] == "outdated"
     # What it should say now, beside what was last signed.
-    assert "service" in outdated["document"]
-    assert "service" not in outdated["signed_document"]
-    assert outdated["changes"] == ["service"]
+    assert "assertionMethod" in outdated["document"]
+    assert "assertionMethod" not in outdated["signed_document"]
+    assert "assertionMethod" in outdated["changes"]
     second = await sign(client, headers, tenant, issuer["identity"]["id"], wallet)
     assert second["sign"]["version"] == 2 and second["sign"]["did"] == did
     lines = (await client.get(f"/ids/{slug}/did.jsonl")).text.splitlines()
@@ -250,7 +237,7 @@ async def test_the_did_document_names_the_mediator(
     assert [s["type"] for s in detail["document"]["service"]] == ["LinkedDomains"]
 
     await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
-    await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
+    await publish(client, headers, tenant, "mediators", mediator["id"])
     detail = (await client.get(f"{base}/identities/{identity_id}", headers=headers)).json()
     assert detail["used_by"][0]["kind"] == "tenant"
     assert [s for s in detail["document"]["service"] if s["type"] != "LinkedDomains"] == [

@@ -53,7 +53,7 @@ def _mark(size: int) -> str:
 
 
 # The favicon is the mark itself, in red, so the API needs no icon file.
-_FAVICON = "data:image/svg+xml," + quote(
+FAVICON = "data:image/svg+xml," + quote(
     _MARK.format(size=64)
     .replace('aria-hidden="true"', 'xmlns="http://www.w3.org/2000/svg"')
     .replace("currentColor", BRAND)
@@ -79,7 +79,7 @@ def page(*, ready: bool, version: str, settings: Settings, year: int) -> str:
     """The root page, whole."""
     state, label = ("ok", "Operational") if ready else ("down", "Degraded")
     return _TEMPLATE.substitute(
-        favicon=_FAVICON,
+        favicon=FAVICON,
         css=_CSS,
         logo=_mark(28),
         small=_mark(18),

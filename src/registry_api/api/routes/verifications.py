@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, quote
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
-from registry_api import form_credentials, presentations, queues, trust_anchor
+from registry_api import form_credentials, presentations, queues, trust_anchor, wallet
 from registry_api.api.routes.auth import CurrentSession, DbSession, as_utc
 from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.forms import VerifyOut, verdict
@@ -48,7 +48,7 @@ def _client_id() -> str:
 
 
 def _request_uri(item: Verification) -> str:
-    return f"{get_settings().public_url.rstrip('/')}/api/v1/verifications/{item.id}/request"
+    return wallet.channel_url(f"/verifications/{item.id}/request")
 
 
 class VerificationIn(BaseModel):
@@ -121,7 +121,7 @@ async def open_verification(
     db: DbSession,
 ) -> VerificationOut:
     verifier = await _verifier(db, tenant_id, verifier_id)
-    # The wallet is shown who asks: a DID that resolves, endorsed by the tenant.
+    # The wallet is shown who asks: a DID that resolves, published by the tenant.
     if verifier.published_at is None or verifier.identity.did is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="verifier_unpublished")
     form = await db.get(Form, body.form_id)
@@ -181,13 +181,12 @@ async def read_request(verification_id: uuid.UUID, db: DbSession) -> dict[str, A
     item = await _live(db, verification_id)
     verifier = await db.get_one(Verifier, item.verifier_id)
     form = await db.get_one(Form, item.form_id)
-    base = get_settings().public_url.rstrip("/")
     return {
         "response_type": "vp_token",
         "response_mode": "direct_post",
         "client_id": _client_id(),
         "client_name": verifier.name,
-        "response_uri": f"{base}/api/v1/verifications/{item.id}/request/response",
+        "response_uri": f"{_request_uri(item)}/response",
         "nonce": item.nonce,
         "purpose": "verify",
         "expires_at": item.expires_at.isoformat(),

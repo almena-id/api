@@ -66,9 +66,9 @@ async def test_every_tool_is_a_route_with_its_schema(client: AsyncClient, outbox
     assert by_name["update_tenant"]["annotations"]["destructiveHint"] is True
     assert "limit" in by_name["list_issuers"]["inputSchema"]["properties"]
 
-    # Nothing that deletes, unpublishes, decides, or touches the account's ways in.
+    # Nothing that deletes, publishes, decides, or touches the account's ways in.
     assert not any(t.method not in ("GET", "POST", "PUT", "PATCH") for t in mcp.TOOLS)
-    for left_out in ("/unpublish", "/decision", "/auth/me/tokens", "/auth/wallet"):
+    for left_out in ("/publish", "/decision", "/auth/me/tokens", "/auth/wallet"):
         assert not any(left_out in t.path for t in mcp.TOOLS)
 
 

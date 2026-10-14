@@ -32,7 +32,7 @@ here, and need none:
 
 The issuer's tenant reads submitted applications, their files and the
 holder's signature, and accepts or rejects them (``/tenants/{id}/applications``,
-`routes.inbox`); the holder is told over DIDComm (`registry_api.notices`).
+`routes.inbox`).
 
 This module is the holder's side (start, answers, files, what is signed);
 the offers are `routes.offers`, the wallet's requests and answers
@@ -202,7 +202,7 @@ def filled_by_credentials(item: Application) -> dict[str, Any]:
 
 
 def deep_link(item: Application) -> str:
-    uri = f"{get_settings().public_url.rstrip('/')}/api/v1/applications/{item.id}/request"
+    uri = wallet.channel_url(f"/applications/{item.id}/request")
     return f"almena://auth?request_uri={quote(uri, safe='')}"
 
 

@@ -6,6 +6,12 @@ wallet fetches it, the person approves, and the wallet posts back
 registry. The token is a JWS whose issuer and subject are that key's
 ``did:key`` (Ed25519), its audience the portal, and its nonce the request's.
 No DIDComm and no key here: the API only checks signatures.
+
+Everything the wallet reads or answers lives on the identity domain
+(``did_url``, almena.id), not on the API's own host: the wallet derives the
+key it keeps for a registry from the origin it reads the request from, so that
+origin must be the stable name of the identity, not where the service happens
+to run. The edge sends those paths to this API.
 """
 
 import time
@@ -13,11 +19,18 @@ import time
 import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from registry_api.config import get_settings
+
 _ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 # Multicodec prefix of an Ed25519 public key (0xed, as a varint).
 _ED25519 = b"\xed\x01"
 # How far a token's `iat` may sit from this clock.
 LEEWAY = 300
+
+
+def channel_url(path: str) -> str:
+    """An address the wallet reads or answers, ``path`` under /api/v1."""
+    return f"{get_settings().did_url.rstrip('/')}/api/v1{path}"
 
 
 class WalletError(Exception):

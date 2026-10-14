@@ -6,9 +6,8 @@ and exists once a tenant admin has signed its first log entry from a wallet;
 until then it is pending. The log itself is `DidLogEntry`."""
 
 import uuid
-from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from registry_api.models.base import Base, TimestampMixin, slug_column
@@ -25,15 +24,6 @@ class Identity(TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200))
     # `did:webvh:{SCID}:…`, set when the first log entry is signed.
     did: Mapped[str | None] = mapped_column(String(255), unique=True)
-    # An issuer's, verifier's or mediator's `whois.vp`: its tenant's signed
-    # endorsement, presented by the tenant as its controller; set when it is
-    # published, cleared when it is taken back. And until when it holds.
-    presentation: Mapped[str | None] = mapped_column(Text)
-    endorsed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # An issuer's or verifier's messaging key (X25519, a multikey): the public
-    # half, listed under `keyAgreement`; the private one is in the vault (see
-    # `registry_api.messaging_keys`). Set when its signer first signs it.
-    agreement_key: Mapped[str | None] = mapped_column(String(64))
 
 
 class DidLogEntry(TimestampMixin, Base):

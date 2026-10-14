@@ -29,24 +29,23 @@ it, as a `LinkedDomains` service.
 **Keys.** What an identity signs is checked against the keys its document
 lists under `assertionMethod`, each one embedded as a `Multikey` verification
 method (`{did}#{multikey}`) so a verifier needs to resolve nothing else: for a
-tenant's own identity, the keys its signing flow names (under `authentication` too,
-for the presentation that is its `whois.vp`; an issuer's, verifier's or
-mediator's `authentication` names those same keys as methods of the tenant's
-DID, its controller, which presents the tenant's endorsement of it) (the same keys that update
+tenant's own identity, the keys its signing flow names (under `authentication` too;
+an issuer's, verifier's or mediator's `authentication` names those same keys
+as methods of the tenant's DID, its controller) (the same keys that update
 its log); for an
 issuer or a verifier, the wallets of the member its signing system names; a
 mediator signs nothing. Every key is a person's registry `did:key`: the
 registry holds none.
 
-**Messaging.** An issuer or a verifier gets a key to receive messages
-(X25519, under `keyAgreement`) when its signer signs it: see `messaging_keys`.
+**Messaging.** An issuer or a verifier lists no `keyAgreement` and no
+DIDComm service: the platform keeps no private key to read its messages with.
 
 **Phases.** A document says only what is true already, so it grows with the
 item: its DID once the first entry is signed (until then, the template);
 `controller` and `authentication` once the tenant's own DID is signed;
-`assertionMethod` once its signer has a wallet; `keyAgreement` once its
-messaging key exists; the DIDComm service once there is somewhere to deliver
-to — a published mediator and, for an issuer or verifier, a key to encrypt to.
+`assertionMethod` once its signer has a wallet; the DIDComm service once
+there is somewhere to deliver to — a published mediator (never for an issuer
+or verifier, which have no key to encrypt to).
 
 An issuer, verifier or mediator that is still a draft (unpublished) has no
 public document, and no document routes messages through a draft mediator.
@@ -150,23 +149,20 @@ def document(
     keys: list[str] | None = None,
     authenticate: bool = False,
     controller_keys: list[str] | None = None,
-    agreement_key: str | None = None,
 ) -> dict[str, Any]:
     """The DID document an identity publishes: `endpoint` is where its DIDComm
     messages go (an address, or a mediator's DID), `controller` the DID of the
     tenant it belongs to, `domains` the tenant's proved domains, `keys` the
-    multikeys that sign for it, `agreement_key` the one messages to it are
-    encrypted to; each if any."""
+    multikeys that sign for it; each if any."""
     context = [DID_CONTEXT]
-    if keys or agreement_key:
+    if keys:
         context.append(MULTIKEY_CONTEXT)
     if domains:
         context.append(LINKED_DOMAINS_CONTEXT)
     doc: dict[str, Any] = {"@context": context, "id": did}
     if controller:
         doc["controller"] = controller
-    methods = [*(keys or []), *([agreement_key] if agreement_key else [])]
-    if methods:
+    if keys:
         doc["verificationMethod"] = [
             {
                 "id": f"{did}#{key}",
@@ -174,19 +170,17 @@ def document(
                 "controller": did,
                 "publicKeyMultibase": key,
             }
-            for key in methods
+            for key in keys
         ]
     if keys:
         doc["assertionMethod"] = [f"{did}#{key}" for key in keys]
-        # A tenant's keys also sign its presentations (its `whois.vp`).
+        # A tenant's keys also authenticate as it.
         if authenticate:
             doc["authentication"] = [f"{did}#{key}" for key in keys]
-    # A component's presentations are signed by its controller, the tenant:
-    # the keys its signing flow names, as methods of the tenant's DID.
+    # A component authenticates through its controller, the tenant: the keys
+    # its signing flow names, as methods of the tenant's DID.
     if controller and controller_keys:
         doc["authentication"] = [f"{controller}#{key}" for key in controller_keys]
-    if agreement_key:
-        doc["keyAgreement"] = [f"{did}#{agreement_key}"]
     service: list[dict[str, Any]] = []
     if endpoint:
         service.append(
@@ -288,8 +282,8 @@ async def desired(db: AsyncSession, did_url: str, identity: Identity) -> dict[st
     item = await acting(db, identity.id)
     controller = await controller_for(db, identity.id)
     endpoint = await endpoint_for(db, identity.id)
-    # An issuer or verifier with no key yet has nothing to be written to with.
-    if identity.agreement_key is None and isinstance(item, Issuer | Verifier):
+    # An issuer or verifier has no key to be written to with.
+    if isinstance(item, Issuer | Verifier):
         endpoint = None
     return document(
         did,
@@ -299,7 +293,6 @@ async def desired(db: AsyncSession, did_url: str, identity: Identity) -> dict[st
         keys=await signing_keys(db, identity),
         authenticate=isinstance(item, Tenant),
         controller_keys=await update_keys(db, identity.tenant_id) if controller else None,
-        agreement_key=identity.agreement_key,
     )
 
 

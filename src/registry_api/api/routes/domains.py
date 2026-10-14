@@ -19,10 +19,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from registry_api import custody
 from registry_api import dns_proof as checks
 from registry_api.api.routes.auth import DbSession
-from registry_api.api.routes.directory import TenantId, VaultDep
+from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.members import admin_of
 from registry_api.models import Tenant, TenantDomain
 
@@ -139,7 +138,6 @@ async def check_domain(
     domain_id: uuid.UUID,
     db: DbSession,
     lookup: TxtLookup,
-    vault: VaultDep,
 ) -> DomainOut:
     item = await _owned(db, tenant_id, domain_id)
     slug = await _slug(db, tenant_id)
@@ -158,12 +156,9 @@ async def check_domain(
         if item.verified_at is not None:
             item.verified_at = None
             await db.commit()
-            await custody.settle(db, vault, tenant_id)
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="dns_record_not_found")
     item.verified_at = datetime.now(UTC)
     await db.commit()
-    # Under the flow `none` the DID documents that list it are signed now.
-    await custody.settle(db, vault, tenant_id)
     return _out(item, slug)
 
 
@@ -173,10 +168,7 @@ async def check_domain(
     summary="Remove a domain (admins)",
     responses={status.HTTP_404_NOT_FOUND: {"description": "`domain_not_found`"}},
 )
-async def remove_domain(
-    tenant_id: AdminTenant, domain_id: uuid.UUID, db: DbSession, vault: VaultDep
-) -> Response:
+async def remove_domain(tenant_id: AdminTenant, domain_id: uuid.UUID, db: DbSession) -> Response:
     await db.delete(await _owned(db, tenant_id, domain_id))
     await db.commit()
-    await custody.settle(db, vault, tenant_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

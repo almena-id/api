@@ -37,7 +37,7 @@ async def _verifier_and_form(
     assert early.status_code == 409 and early.json()["detail"] == "verifier_unpublished"
     wallet = await ready(client, headers, tenant)
     await sign(client, headers, tenant, verifier["identity"]["id"], wallet)
-    await publish(client, headers, tenant, "verifiers", verifier["id"], wallet)
+    await publish(client, headers, tenant, "verifiers", verifier["id"])
     return headers, tenant, verifier, form.json()["id"]
 
 

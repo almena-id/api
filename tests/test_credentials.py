@@ -104,7 +104,7 @@ async def test_an_issuer_declares_what_it_grants(client: AsyncClient, outbox: Ou
     # The public catalogue says what each issuer grants.
     wallet = await ready(client, headers, tenant)
     await sign(client, headers, tenant, created["identity"]["id"], wallet)
-    await publish(client, headers, tenant, "issuers", created["id"], wallet)
+    await publish(client, headers, tenant, "issuers", created["id"])
     items = (await client.get("/api/v1/catalog/issuers")).json()["items"]
     assert items[0]["credential_types"] == ["employment", "membership"]
 
@@ -141,7 +141,7 @@ async def test_the_public_catalogue_lists_every_offer_page_by_page(
         assert saved.status_code == 200, saved.text
         await sign(client, headers, tenant, created["identity"]["id"], wallet)
         if published:
-            await publish(client, headers, tenant, "issuers", created["id"], wallet)
+            await publish(client, headers, tenant, "issuers", created["id"])
         return created
 
     # Granted without a form, or not published: not offered.
@@ -191,7 +191,7 @@ async def test_the_catalogue_finds_issuers_by_what_they_grant_and_their_name(
             f"{issuers}/{created['id']}/credential-types", json={"types": types}, headers=headers
         )
         await sign(client, headers, tenant, created["identity"]["id"], wallet)
-        await publish(client, headers, tenant, "issuers", created["id"], wallet)
+        await publish(client, headers, tenant, "issuers", created["id"])
         return created
 
     await issuer("North Gym", ["membership"])

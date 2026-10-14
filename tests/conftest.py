@@ -17,8 +17,6 @@ from registry_api.main import app
 from registry_api.models import Base, Tenant
 from registry_api.root import create_root
 from registry_api.trust_anchor import ANCHOR_NAME
-from registry_api.vault import get_vault
-from registry_api.vault.memory import MemoryVault
 
 
 class Outbox(Mailer):
@@ -83,14 +81,6 @@ def broker() -> MemoryBroker:
     """A broker in memory per test, in place of RabbitMQ."""
     store = MemoryBroker()
     app.dependency_overrides[get_broker] = lambda: store
-    return store
-
-
-@pytest.fixture(autouse=True)
-def vault() -> MemoryVault:
-    """A vault in memory per test, in place of OpenBao."""
-    store = MemoryVault()
-    app.dependency_overrides[get_vault] = lambda: store
     return store
 
 

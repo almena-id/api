@@ -55,10 +55,6 @@ class Tenant(TimestampMixin, Base):
     signing_flow: Mapped[str] = mapped_column(
         String(32), default="any_admin", server_default="any_admin"
     )
-    # The key the platform signs as the tenant with under `none` (`custody`),
-    # as a multikey: the private half is in the vault. Made the first time the
-    # tenant chooses `none` and kept after, to hand over to another flow.
-    platform_key: Mapped[str | None] = mapped_column(String(64))
     # `single_user`: the member who signs. Kept if they leave, signing nothing,
     # until somebody else is chosen.
     signer_id: Mapped[uuid.UUID | None] = mapped_column(

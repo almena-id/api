@@ -100,6 +100,9 @@ async def test_a_tenant_starts_signed_by_any_one_admin(client: AsyncClient, outb
 
     unknown = await client.patch(url, json={"signing_flow": "everyone"}, headers=ada)
     assert unknown.status_code == 422
+    # Nobody signing, the platform for them, is no flow: it keeps no keys.
+    platform = await client.patch(url, json={"signing_flow": "none"}, headers=ada)
+    assert platform.status_code == 422
 
 
 async def test_one_member_can_be_the_tenants_signer(client: AsyncClient, outbox: Outbox) -> None:

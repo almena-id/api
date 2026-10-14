@@ -85,15 +85,8 @@ async def test_the_signers_key_goes_in_the_document(client: AsyncClient, outbox:
     assert detail["signature"] == "outdated"
     did = detail["did"]
     key = bob_wallet.did.removeprefix("did:key:")
-    agreement = detail["document"]["keyAgreement"][0].removeprefix(f"{did}#")
     assert detail["document"]["verificationMethod"] == [
         {"id": f"{did}#{key}", "type": "Multikey", "controller": did, "publicKeyMultibase": key},
-        {
-            "id": f"{did}#{agreement}",
-            "type": "Multikey",
-            "controller": did,
-            "publicKeyMultibase": agreement,
-        },
     ]
     assert detail["document"]["assertionMethod"] == [f"{did}#{key}"]
     await sign(client, ada, tenant, issuer["identity"]["id"], admin_wallet)

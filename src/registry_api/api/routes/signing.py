@@ -17,9 +17,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import custody
 from registry_api.api.routes.auth import DbSession
-from registry_api.api.routes.directory import TenantId, VaultDep
+from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.members import admin_of
 from registry_api.models import Issuer, TenantMember, User, UserIdentity, Verifier
 
@@ -113,7 +112,6 @@ async def set_signing(
     item_id: uuid.UUID,
     body: SigningIn,
     db: DbSession,
-    vault: VaultDep,
 ) -> SigningOut:
     item = await _owned(db, kind, tenant_id, item_id)
     if body.system is None:
@@ -130,6 +128,4 @@ async def set_signing(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="signer_not_member")
         item.signing, item.signer_id = body.system, body.user_id
     await db.commit()
-    # Its DID lists its signer's key: under the flow `none` it is signed now.
-    await custody.settle(db, vault, tenant_id)
     return await _out(db, item)

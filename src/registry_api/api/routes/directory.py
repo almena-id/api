@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import custody, dids, logs, mediators, paging, texts
+from registry_api import dids, logs, mediators, paging, texts
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.config import get_settings
 from registry_api.models import (
@@ -34,7 +34,6 @@ from registry_api.models import (
     TenantMember,
     Verifier,
 )
-from registry_api.vault import Vault, get_vault
 
 router = APIRouter(prefix="/tenants/{tenant_id}", tags=["directory"])
 
@@ -52,7 +51,6 @@ async def member_tenant(tenant_id: uuid.UUID, session: CurrentSession, db: DbSes
 
 
 TenantId = Annotated[uuid.UUID, Depends(member_tenant)]
-VaultDep = Annotated[Vault, Depends(get_vault)]
 Limit = paging.Limit
 Cursor = paging.Cursor
 
@@ -181,10 +179,6 @@ class Signed(BaseModel):
     changes: list[str]
     log_url: str | None
     document_url: str | None
-    # A published issuer's, verifier's or mediator's endorsement by its
-    # tenant: where its `whois.vp` is, and until when it holds.
-    whois_url: str | None = None
-    endorsed_until: datetime | None = None
 
 
 class IdentityDetail(Signed):
@@ -215,8 +209,6 @@ async def signed_of(db: AsyncSession, identity: Identity) -> Signed:
         changes=dids.changes(document, signed_document),
         log_url=f"{base}/did.jsonl" if identity.did else None,
         document_url=f"{base}/did.json" if identity.did else None,
-        whois_url=f"{base}/whois.vp" if identity.presentation else None,
-        endorsed_until=identity.endorsed_until,
     )
 
 
@@ -310,14 +302,12 @@ async def _page(
     )
 
 
-async def _create(db: DbSession, vault: Vault, item: Item) -> ItemOut:
+async def _create(db: DbSession, item: Item) -> ItemOut:
     # Stamped here rather than by the database, to the microsecond, so the
     # (created_at, id) order the cursor walks is the order of creation.
     item.created_at = datetime.now(UTC)
     db.add(item)
     await db.commit()
-    # Under the flow `none` its DID is signed now, by the platform.
-    await custody.settle(db, vault, item.tenant_id)
     await db.refresh(item)
     if isinstance(item, Issuer | Verifier):
         await db.refresh(item, ["identity", "mediator"])
@@ -385,15 +375,12 @@ async def list_issuers(
         }
     },
 )
-async def create_issuer(
-    tenant_id: TenantId, body: DescribedIn, db: DbSession, vault: VaultDep
-) -> ItemOut:
+async def create_issuer(tenant_id: TenantId, body: DescribedIn, db: DbSession) -> ItemOut:
     await texts.enabled_only(db, tenant_id, body.description)
     mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
     identity_id = await _identity_for(db, tenant_id, body.name)
     return await _create(
         db,
-        vault,
         Issuer(
             tenant_id=tenant_id,
             name=body.name,
@@ -422,15 +409,12 @@ async def list_verifiers(
         }
     },
 )
-async def create_verifier(
-    tenant_id: TenantId, body: DescribedIn, db: DbSession, vault: VaultDep
-) -> ItemOut:
+async def create_verifier(tenant_id: TenantId, body: DescribedIn, db: DbSession) -> ItemOut:
     await texts.enabled_only(db, tenant_id, body.description)
     mediator_id = await tenant_mediator(db, tenant_id, body.mediator_id)
     identity_id = await _identity_for(db, tenant_id, body.name)
     return await _create(
         db,
-        vault,
         Verifier(
             tenant_id=tenant_id,
             name=body.name,
@@ -470,7 +454,6 @@ def _rename(item: Issuer | Verifier | Mediator, name: str | None) -> None:
 
 async def _update_described(
     db: DbSession,
-    vault: Vault,
     item: Issuer | Verifier,
     tenant_id: uuid.UUID,
     body: DescribedPatch,
@@ -484,7 +467,6 @@ async def _update_described(
     if "name" in sent:
         _rename(item, body.name)
     await db.commit()
-    await custody.settle(db, vault, tenant_id)
     await db.refresh(item, ["identity", "mediator"])
     return await item_detail(db, item)
 
@@ -506,10 +488,9 @@ async def update_issuer(
     issuer_id: uuid.UUID,
     body: DescribedPatch,
     db: DbSession,
-    vault: VaultDep,
 ) -> ItemDetail:
     issuer = await _described(db, Issuer, tenant_id, issuer_id)
-    return await _update_described(db, vault, issuer, tenant_id, body)
+    return await _update_described(db, issuer, tenant_id, body)
 
 
 @router.get("/verifiers/{verifier_id}", summary="One verifier, with its DID")
@@ -529,10 +510,9 @@ async def update_verifier(
     verifier_id: uuid.UUID,
     body: DescribedPatch,
     db: DbSession,
-    vault: VaultDep,
 ) -> ItemDetail:
     verifier = await _described(db, Verifier, tenant_id, verifier_id)
-    return await _update_described(db, vault, verifier, tenant_id, body)
+    return await _update_described(db, verifier, tenant_id, body)
 
 
 @router.get("/mediators", summary="The tenant's mediators, newest first")
@@ -553,14 +533,11 @@ async def list_mediators(
         }
     },
 )
-async def create_mediator(
-    tenant_id: TenantId, body: MediatorIn, db: DbSession, vault: VaultDep
-) -> ItemOut:
+async def create_mediator(tenant_id: TenantId, body: MediatorIn, db: DbSession) -> ItemOut:
     url = await _address(db, tenant_id, body.subdomain, body.domain_id)
     identity_id = await _identity_for(db, tenant_id, body.name)
     return await _create(
         db,
-        vault,
         Mediator(
             tenant_id=tenant_id,
             name=body.name,
@@ -598,7 +575,6 @@ async def update_mediator(
     mediator_id: uuid.UUID,
     body: MediatorPatch,
     db: DbSession,
-    vault: VaultDep,
 ) -> ItemDetail:
     mediator = await _mediator(db, tenant_id, mediator_id)
     sent = body.model_fields_set
@@ -610,7 +586,6 @@ async def update_mediator(
     if "name" in sent:
         _rename(mediator, body.name)
     await db.commit()
-    await custody.settle(db, vault, tenant_id)
     await db.refresh(mediator, ["identity"])
     return await item_detail(db, mediator)
 
@@ -683,10 +658,8 @@ async def get_identity(
 
 
 @router.post("/identities", status_code=status.HTTP_201_CREATED, summary="Register an identity")
-async def create_identity(
-    tenant_id: TenantId, body: NamedIn, db: DbSession, vault: VaultDep
-) -> ItemOut:
-    return await _create(db, vault, Identity(tenant_id=tenant_id, name=body.name))
+async def create_identity(tenant_id: TenantId, body: NamedIn, db: DbSession) -> ItemOut:
+    return await _create(db, Identity(tenant_id=tenant_id, name=body.name))
 
 
 async def _identity(db: DbSession, tenant_id: uuid.UUID, identity_id: uuid.UUID) -> Identity:

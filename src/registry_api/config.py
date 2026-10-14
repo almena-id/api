@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    # One JSON object per line (containers, OpenObserve) or text for a terminal.
+    # One JSON object per line (containers) or text for a terminal.
     log_format: Literal["json", "text"] = "json"
     # Proxies whose X-Forwarded-* headers are trusted (comma-separated IPs or "*").
     forwarded_allow_ips: str = "127.0.0.1"
@@ -28,7 +28,8 @@ class Settings(BaseSettings):
     # Public origin of this API, advertised as the server in the OpenAPI document.
     public_url: str = "https://api.almena.id"
     # Origin of the identity domain: identities' did:web DIDs are made from it
-    # and resolve there; it proxies /ids/ and /.well-known/ to this API.
+    # and resolve there, and the wallet's channel lives there (wallet.channel_url);
+    # it proxies /ids/, /.well-known/, /schemas/ and those paths to this API.
     did_url: str = "https://almena.id"
     # Origins allowed by CORS: the registry portal.
     cors_origins: list[str] = Field(default_factory=lambda: ["https://registry.almena.id"])
@@ -88,15 +89,6 @@ class Settings(BaseSettings):
     smtp_password: SecretStr = SecretStr("")
     smtp_starttls: bool = False
     mail_from: str = "Almena Registry <no-reply@almena.id>"
-
-    # The vault keeping the platform's secrets (issuers', verifiers' and
-    # mediators' keys): which service, and how to reach it. See registry_api.vault.
-    vault_provider: Literal["openbao"] = "openbao"
-    openbao_addr: str = "http://localhost:8200"
-    # The KV v2 mount holding them, and the AppRole the API signs in with.
-    openbao_mount: str = "almena"
-    openbao_role_id: str = "registry-api"
-    openbao_secret_id: SecretStr = SecretStr("")
 
     # The broker issuers' and verifiers' back offices read their queues from
     # (registry_api.broker). The API manages it through the management HTTP

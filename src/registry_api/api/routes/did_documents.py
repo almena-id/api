@@ -1,6 +1,5 @@
-"""The DIDs the tenants' identities publish: each one's did:webvh log, its
-current document under its did:web name, and — for a published issuer,
-verifier or mediator — its `whois.vp`, its tenant's endorsement.
+"""The DIDs the tenants' identities publish: each one's did:webvh log and its
+current document under its did:web name.
 
 Public, outside ``/api/v1``: the path is part of the DID and cannot move. A
 pending identity (nothing signed yet) and a draft's are not found.
@@ -67,15 +66,3 @@ async def did_log(slug: str, db: DbSession) -> Response:
 async def did_document(slug: str, db: DbSession) -> JSONResponse:
     _, entries = await _public(db, slug)
     return web_response(entries)
-
-
-@router.get(
-    f"/{dids.PATH}/{{slug}}/whois.vp",
-    summary="A published issuer's, verifier's or mediator's whois.vp: its tenant's endorsement",
-    response_class=Response,
-)
-async def whois(slug: str, db: DbSession) -> Response:
-    identity, _ = await _public(db, slug)
-    if identity.presentation is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
-    return Response(identity.presentation, media_type="application/vp")

@@ -17,6 +17,7 @@ def urls(monkeypatch: pytest.MonkeyPatch) -> Settings:
     s = get_settings()
     monkeypatch.setattr(s, "portal_url", "http://portal.test")
     monkeypatch.setattr(s, "public_url", "http://test")
+    monkeypatch.setattr(s, "did_url", "http://id.test")
     return s
 
 
@@ -167,6 +168,15 @@ async def test_a_wallet_of_another_account_offers_the_move(
     )
     assert moved.json()["user"]["id"] == owner
     assert moved.json()["user"]["email"] == "ada@example.org"
+
+
+async def test_the_wallet_is_asked_on_the_identity_domain(client: AsyncClient) -> None:
+    # The wallet's key for this registry follows the origin it reads from:
+    # the identity's name, never the API's own host.
+    asked = await _ask(client)
+    assert asked["request_uri"].startswith("http://id.test/api/v1/auth/wallet/requests/")
+    request = (await client.get(asked["request_uri"])).json()
+    assert request["response_uri"] == f"{asked['request_uri']}/response"
 
 
 async def test_the_cli_asks_as_itself(client: AsyncClient) -> None:

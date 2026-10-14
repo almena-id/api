@@ -54,12 +54,6 @@ services:
       REGISTRY_MAIL_FROM: ${REGISTRY_MAIL_FROM:-Almena Registry <no-reply@almena.id>}
       REGISTRY_PORTAL_URL: ${REGISTRY_PORTAL_URL:-https://registry.almena.id}
       REGISTRY_CATALOG_URL: ${REGISTRY_CATALOG_URL:-https://catalog.almena.id}
-      REGISTRY_VAULT_PROVIDER: ${REGISTRY_VAULT_PROVIDER:-openbao}
-      # The openbao service below; task up provisions it before the API starts.
-      REGISTRY_OPENBAO_ADDR: ${REGISTRY_OPENBAO_DOCKER_ADDR:-http://openbao:8200}
-      REGISTRY_OPENBAO_MOUNT: ${REGISTRY_OPENBAO_MOUNT:-almena}
-      REGISTRY_OPENBAO_ROLE_ID: ${REGISTRY_OPENBAO_ROLE_ID:-registry-api}
-      REGISTRY_OPENBAO_SECRET_ID: ${REGISTRY_OPENBAO_SECRET_ID:?set REGISTRY_OPENBAO_SECRET_ID in .env (task init)}
       REGISTRY_RABBITMQ_API_URL: ${REGISTRY_RABBITMQ_DOCKER_API_URL:-http://rabbitmq:15672}
       REGISTRY_RABBITMQ_ADMIN: ${REGISTRY_RABBITMQ_ADMIN:-almena}
       REGISTRY_RABBITMQ_PASSWORD: ${REGISTRY_RABBITMQ_PASSWORD:?set REGISTRY_RABBITMQ_PASSWORD in .env (task init)}
@@ -79,8 +73,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      openbao:
-        condition: service_healthy
 
   migrate:
     # Brings the schema up to date, then exits; the API waits for it.
@@ -125,27 +117,6 @@ services:
       - "127.0.0.1:${REGISTRY_SMTP_PORT:-1025}:1025"
       - "127.0.0.1:${REGISTRY_MAILPIT_UI_PORT:-8025}:8025"
 
-  openobserve:
-    # Indexes the logs: its UI and ingestion API at http://localhost:5080,
-    # signing in as REGISTRY_OPENOBSERVE_ADMIN. The image has no shell, so no
-    # healthcheck: GET /healthz answers once it is up.
-    image: public.ecr.aws/zinclabs/openobserve:v1.0.4
-    restart: unless-stopped
-    environment:
-      ZO_ROOT_USER_EMAIL: ${REGISTRY_OPENOBSERVE_ADMIN:-admin@almena.id}
-      # 8-128 characters with a lowercase and an uppercase letter, a digit and
-      # a symbol, or it refuses to start.
-      ZO_ROOT_USER_PASSWORD: ${REGISTRY_OPENOBSERVE_PASSWORD:?set REGISTRY_OPENOBSERVE_PASSWORD in .env (task init)}
-      ZO_DATA_DIR: /data
-      # Entries older than this are deleted (whole files, by the compactor, so
-      # some hours late at most).
-      ZO_COMPACT_DATA_RETENTION_DAYS: ${REGISTRY_OPENOBSERVE_RETENTION_DAYS:-30}
-      ZO_TELEMETRY: "false"
-    ports:
-      - "127.0.0.1:${REGISTRY_OPENOBSERVE_PORT:-5080}:5080"
-    volumes:
-      - openobserve-data:/data
-
   rabbitmq:
     # The tenants' message broker: their applications subscribe over AMQP to
     # the queues the platform publishes to. REGISTRY_RABBITMQ_ADMIN is the
@@ -173,34 +144,6 @@ services:
       timeout: 5s
       retries: 5
 
-  openbao:
-    # The vault where the platform keeps the keys of the issuers, verifiers
-    # and mediators (registry_api.vault's `openbao` provider). A real server on
-    # Raft storage, not dev mode: what it holds survives restarts, and it
-    # starts sealed. `task openbao` initializes it the first time (one unseal
-    # key, kept in .openbao-keys.json with the root token), unseals it and
-    # provisions the API's mount and AppRole. The API and UI stay on loopback, at
-    # http://localhost:8200/ui.
-    image: openbao/openbao:2.7.1
-    restart: unless-stopped
-    command: ["server", "-config=/etc/openbao/config.hcl"]
-    environment:
-      BAO_ADDR: http://127.0.0.1:8200
-    ports:
-      - "127.0.0.1:${REGISTRY_OPENBAO_PORT:-8200}:8200"
-    volumes:
-      - ./openbao/config.hcl:/etc/openbao/config.hcl:ro
-      - openbao-data:/openbao/file
-    healthcheck:
-      # Healthy once it answers, sealed or not: unsealing is a step of its own.
-      # `bao status` exits 0 unsealed, 2 sealed, 1 when it cannot be reached.
-      test: ["CMD-SHELL", "bao status > /dev/null; [ $$? -ne 1 ]"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
 volumes:
   postgres-data:
-  openobserve-data:
   rabbitmq-data:
-  openbao-data:

@@ -150,7 +150,7 @@ async def _issuer(client: AsyncClient, outbox: Outbox, email: str, types: list[s
         headers=headers,
     )
     await sign(client, headers, tenant, created["identity"]["id"], signer)
-    await publish(client, headers, tenant, "issuers", created["id"], signer)
+    await publish(client, headers, tenant, "issuers", created["id"])
     detail = (await client.get(f"{base}/{created['id']}", headers=headers)).json()
     return Issuer(detail["did"], signer)
 

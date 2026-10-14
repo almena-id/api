@@ -10,7 +10,7 @@ from registry_api.models import TenantMember
 from registry_api.root import create_root
 from tests.conftest import Dns, Outbox
 from tests.fake_wallet import FakeWallet
-from tests.mediators import new_mediator
+from tests.mediators import new_mediator, verified_domain
 from tests.signing import Headers, link_wallet, publish, ready, sign
 from tests.test_directory import _sign_in
 
@@ -42,7 +42,7 @@ async def _published_mediator(
 ) -> str:
     mediator = await new_mediator(client, headers, tenant, dns, subdomain="relay", public=public)
     await sign(client, headers, tenant, mediator["identity"]["id"], wallet)
-    await publish(client, headers, tenant, "mediators", mediator["id"], wallet)
+    await publish(client, headers, tenant, "mediators", mediator["id"])
     mediator_id: str = mediator["id"]
     return mediator_id
 
@@ -68,7 +68,7 @@ async def test_it_is_whole_once_set_up(client: AsyncClient, outbox: Outbox, dns:
     assert _issues(await _health(client, ada, tenant))["mediator"] == "unpublished"
 
     await sign(client, ada, tenant, mediator["identity"]["id"], wallet)
-    await publish(client, ada, tenant, "mediators", mediator["id"], wallet)
+    await publish(client, ada, tenant, "mediators", mediator["id"])
     health = await _health(client, ada, tenant)
     assert health["score"] == 100
     assert all(c["done"] for c in health["checks"])
@@ -156,7 +156,7 @@ async def test_new_tenants_start_with_the_roots_mediator(
     _, early = await _sign_in(client, outbox, "early@example.org")
     wallet = await ready(client, headers, root)
     await sign(client, headers, root, mediator["identity"]["id"], wallet)
-    await publish(client, headers, root, "mediators", mediator["id"], wallet)
+    await publish(client, headers, root, "mediators", mediator["id"])
 
     ada, tenant = await _sign_in(client, outbox, "ada@example.org")
     body = (await client.get(f"/api/v1/tenants/{tenant}", headers=ada)).json()
@@ -166,3 +166,46 @@ async def test_new_tenants_start_with_the_roots_mediator(
     assert (await client.get(f"/api/v1/tenants/{early}", headers=early_headers)).json()[
         "mediator"
     ] is None
+
+
+@pytest.mark.no_anchor
+async def test_the_roots_health_is_its_onboarding_in_order(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession, dns: Dns
+) -> None:
+    root = str((await create_root(db, "Almena", "root@almena.id")).id)
+    headers, _ = await _sign_in(client, outbox, "root@almena.id")
+
+    async def steps() -> list[tuple[str, str | None]]:
+        health = await _health(client, headers, root)
+        return [(c["check"], c["issue"]) for c in health["checks"]]
+
+    assert await steps() == [
+        ("name", None),
+        ("signing_flow", "no_wallet"),
+        ("domain", "missing"),
+        ("identity", "pending"),
+        ("mediator", "missing"),
+    ]
+    wallet = FakeWallet()
+    await link_wallet(client, headers, wallet)
+    await verified_domain(client, headers, root, dns)
+    own = (await client.get(f"/api/v1/tenants/{root}", headers=headers)).json()
+    await sign(client, headers, root, own["identity"]["id"], wallet)
+    health = await _health(client, headers, root)
+    assert [c["issue"] for c in health["checks"]][:4] == [None] * 4
+    assert health["checks"][3]["item"] == own["identity"]["id"]
+
+    mediator = await new_mediator(client, headers, root, dns, subdomain="relay", public=True)
+    checks = (await _health(client, headers, root))["checks"]
+    assert (checks[4]["issue"], checks[4]["item"]) == ("unsigned", mediator["id"])
+    await sign(client, headers, root, mediator["identity"]["id"], wallet)
+    assert (await steps())[4] == ("mediator", "unpublished")
+    await publish(client, headers, root, "mediators", mediator["id"])
+    assert (await steps())[4] == ("mediator", "unchosen")
+
+    picked = {"mediator_id": mediator["id"]}
+    await client.patch(f"/api/v1/tenants/{root}", json=picked, headers=headers)
+    # Its document now names the mediator's service: signed again.
+    assert (await steps())[3:] == [("identity", "outdated"), ("mediator", None)]
+    await sign(client, headers, root, own["identity"]["id"], wallet)
+    assert (await _health(client, headers, root))["score"] == 100

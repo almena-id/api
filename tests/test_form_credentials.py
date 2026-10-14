@@ -19,7 +19,7 @@ async def _published_issuer(
     )
     wallet = await ready(client, headers, tenant)
     await sign(client, headers, tenant, created["identity"]["id"], wallet)
-    await publish(client, headers, tenant, "issuers", created["id"], wallet)
+    await publish(client, headers, tenant, "issuers", created["id"])
     did: str = (await client.get(f"{base}/{created['id']}", headers=headers)).json()["did"]
     return did
 

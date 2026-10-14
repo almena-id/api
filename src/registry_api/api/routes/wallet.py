@@ -41,11 +41,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import (
-    custody,
     dids,
     issuance,
-    messaging_keys,
-    notices,
     queues,
     signing_flows,
     status_lists,
@@ -65,22 +62,19 @@ from registry_api.api.routes.auth import (
 )
 from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.members import admin_of
+from registry_api.broker import Broker, get_broker
 from registry_api.config import get_settings
 from registry_api.mail import Locale
 from registry_api.models import (
     Application,
     Identity,
-    Issuer,
-    Mediator,
     StatusList,
     Tenant,
     User,
     UserIdentity,
-    Verifier,
     WalletRequest,
 )
 from registry_api.security import digest, new_token
-from registry_api.vault import Vault, VaultError, get_vault
 
 router = APIRouter(prefix="/auth/wallet", tags=["wallet"])
 signing = APIRouter(prefix="/tenants/{tenant_id}", tags=["wallet"])
@@ -108,13 +102,6 @@ class LocaleIn(BaseModel):
     client: Client = "portal"
 
 
-class SignedOut(BaseModel):
-    """What asking for a signature answers when nobody's wallet is asked: the
-    platform signed it as the tenant, under its flow `none` (`custody`)."""
-
-    status: Literal["signed"] = "signed"
-
-
 class RequestOut(BaseModel):
     id: uuid.UUID
     # Where the wallet reads the request; `deep_link` carries it for the QR code.
@@ -125,7 +112,7 @@ class RequestOut(BaseModel):
     expires_at: datetime
 
 
-SignKind = Literal["did_log_entry", "endorsement", "credential", "status_list"]
+SignKind = Literal["did_log_entry", "credential", "status_list"]
 
 
 class StatusChange(BaseModel):
@@ -142,11 +129,6 @@ class SignObject(BaseModel):
     named as a `did:key`. `credential`: a credential an issuer grants a holder,
     an SD-JWT VC (`document`: its header, payload and disclosures; see
     `registry_api.issuance`), signed as a JWS by the issuer's signer.
-    `endorsement`: a tenant's membership credential for one of its issuers,
-    verifiers or mediators (`document`) and, in the same approval, the
-    component's `whois.vp` (`presentation`, whose `verifiableCredential` the
-    wallet fills with the credential it has just signed), both with a key of
-    the tenant's DID — for the presentation, as the component's controller.
     """
 
     kind: SignKind
@@ -157,7 +139,7 @@ class SignObject(BaseModel):
     did: str | None
     # `did_log_entry`: the version it makes.
     version: int | None = None
-    # `endorsement`: until when it holds.
+    # `credential`: until when it holds.
     valid_until: str | None = None
     # The multikeys that may sign it.
     signers: list[str]
@@ -166,9 +148,6 @@ class SignObject(BaseModel):
     verification_method: str | None = None
     proof_purpose: Literal["assertionMethod", "authentication"] = "assertionMethod"
     document: dict[str, Any]
-    # `endorsement`: the presentation to sign after the credential, signed for
-    # `authentication`.
-    presentation: dict[str, Any] | None = None
     # `status_list`: the entry it changes, and to what (`valid`, `suspended`,
     # `revoked`); `null` when the list is signed as it is.
     status_change: StatusChange | None = None
@@ -211,7 +190,7 @@ def client_of(found: WalletRequest) -> tuple[str, str]:
 
 
 def _request_uri(request_id: uuid.UUID) -> str:
-    return f"{get_settings().public_url.rstrip('/')}/api/v1/auth/wallet/requests/{request_id}"
+    return wallet.channel_url(f"/auth/wallet/requests/{request_id}")
 
 
 async def _live(db: AsyncSession, request_id: uuid.UUID) -> WalletRequest:
@@ -329,9 +308,7 @@ async def answer_request(
     request_id: uuid.UUID,
     request: Request,
     db: DbSession,
-    vault: notices.VaultDep,
-    courier: notices.Courier,
-    broker: notices.BrokerDep,
+    broker: Annotated[Broker, Depends(get_broker)],
 ) -> None:
     found = await _live(db, request_id)
     if found.did is not None:
@@ -343,7 +320,7 @@ async def answer_request(
         try:
             body = json.loads(raw)
             if found.purpose == "sign":
-                await _sign(db, found, body, notices.Notifier(vault, courier, broker))
+                await _sign(db, found, body, broker)
                 return
             token = body.get("id_token")
         except (ValueError, AttributeError):
@@ -364,17 +341,17 @@ async def answer_request(
 
 
 async def _sign(
-    db: AsyncSession, found: WalletRequest, body: dict[str, Any], notifier: notices.Notifier
+    db: AsyncSession, found: WalletRequest, body: dict[str, Any], broker: Broker
 ) -> None:
     """Checks the wallet's proof over what it was asked to sign, and keeps the
-    result: a log entry, or an endorsed (and so published) component."""
+    result: a log entry."""
     payload = json.loads(found.payload or "{}")
     sign = SignObject.model_validate(payload["sign"])
     if sign.kind == "credential":
-        await _issue(db, found, payload, sign, body.get("jws"), notifier)
+        await _issue(db, found, payload, sign, body.get("jws"), broker)
         return
     if sign.kind == "status_list":
-        await _set_statuses(db, found, payload, sign, body.get("jws"), notifier)
+        await _set_statuses(db, found, payload, sign, body.get("jws"), broker)
         return
     proof = body.get("proof")
     try:
@@ -384,7 +361,7 @@ async def _sign(
             sign.signers,
             controller=sign.verification_method,
             purpose=sign.proof_purpose,
-            refusal="not_an_update_key" if sign.kind == "did_log_entry" else "not_a_signer",
+            refusal="not_an_update_key",
         )
     except webvh.LogError as error:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=error.code) from None
@@ -392,15 +369,11 @@ async def _sign(
     if webvh.multikey(did) not in await my_keys(db, found.user_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="not_your_key")
     assert isinstance(proof, dict)
-    signed_document = {**sign.document, "proof": proof}
-    if sign.kind == "endorsement":
-        await endorse(db, payload, sign, signed_document, body.get("presentation_proof"), did)
-    else:
-        identity = await db.get_one(Identity, uuid.UUID(payload["identity_id"]))
-        try:
-            await dids.append(db, identity, payload["previous"], sign.document, proof)
-        except dids.LogMoved:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="log_moved") from None
+    identity = await db.get_one(Identity, uuid.UUID(payload["identity_id"]))
+    try:
+        await dids.append(db, identity, payload["previous"], sign.document, proof)
+    except dids.LogMoved:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="log_moved") from None
     found.did = did
     await db.commit()
 
@@ -411,11 +384,11 @@ async def _issue(
     payload: dict[str, Any],
     sign: SignObject,
     jws: object,
-    notifier: notices.Notifier,
+    broker: Broker,
 ) -> None:
     """The issuer's signer signed the credential: if it is their key, over
-    what was sent, the application's credential is issued, and the holder
-    told so over DIDComm when its wallet said where."""
+    what was sent, the application's credential is issued, which the issuer's
+    queue hears of."""
     credential, key = issuance.signed(sign.document, jws, sign.signers)
     if key not in await my_keys(db, found.user_id):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="not_your_key")
@@ -429,8 +402,7 @@ async def _issue(
     item.credential_status_at = item.issued_at
     found.did = f"did:key:{key}"
     await db.commit()
-    await notifier.notify(db, item, "issued")
-    await queues.issued(db, notifier.broker, item)
+    await queues.issued(db, broker, item)
 
 
 async def _set_statuses(
@@ -439,7 +411,7 @@ async def _set_statuses(
     payload: dict[str, Any],
     sign: SignObject,
     jws: object,
-    notifier: notices.Notifier,
+    broker: Broker,
 ) -> None:
     """The issuer's signer signed its status list: if it is their key, over
     what was sent, and nothing replaced the list meanwhile, it is the list
@@ -468,51 +440,7 @@ async def _set_statuses(
     found.did = f"did:key:{key}"
     await db.commit()
     if changed is not None:
-        await queues.status_changed(db, notifier.broker, changed)
-
-
-async def endorse(
-    db: AsyncSession,
-    payload: dict[str, Any],
-    sign: SignObject,
-    signed_credential: dict[str, Any],
-    proof: object,
-    did: str,
-) -> None:
-    """The tenant endorsed a component: its presentation must hold too, by the
-    same key; then it is the component's `whois.vp`, and the component is
-    published."""
-    assert sign.presentation is not None
-    presentation = {**sign.presentation, "verifiableCredential": [signed_credential]}
-    try:
-        presenter = webvh.check_proof(
-            presentation,
-            proof,
-            sign.signers,
-            controller=sign.verification_method,
-            purpose="authentication",
-            refusal="not_a_signer",
-        )
-    except webvh.LogError as error:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=error.code) from None
-    if presenter != did:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid_proof")
-    models: dict[str, type[Issuer | Verifier | Mediator]] = {
-        "issuers": Issuer,
-        "verifiers": Verifier,
-        "mediators": Mediator,
-    }
-    item = cast(
-        Issuer | Verifier | Mediator | None,
-        await db.get(models[payload["kind"]], uuid.UUID(payload["item_id"])),
-    )
-    if item is None or str(item.identity_id) != payload["identity_id"]:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail="item_gone")
-    identity = await db.get_one(Identity, item.identity_id)
-    identity.presentation = json.dumps({**presentation, "proof": proof}, separators=(",", ":"))
-    identity.endorsed_until = datetime.fromisoformat(signed_credential["validUntil"])
-    if item.published_at is None:
-        item.published_at = datetime.now(UTC)
+        await queues.status_changed(db, broker, changed)
 
 
 async def _account_for(db: AsyncSession, did: str, locale: Locale) -> User:
@@ -581,18 +509,12 @@ async def request_result(
 @signing.post(
     "/identities/{identity_id}/sign",
     summary="Sign the identity's next log entry: a request for the signer's wallet "
-    "(whoever signs as the tenant under its flow), or signed by the platform at once "
-    'under `none` (`{status: "signed"}`)',
+    "(whoever signs as the tenant under its flow)",
     responses={
         status.HTTP_403_FORBIDDEN: {"description": "`not_a_signer`"},
         status.HTTP_404_NOT_FOUND: {"description": "`identity_not_found`"},
         status.HTTP_409_CONFLICT: {
-            "description": "`up_to_date`: nothing to sign; `no_signers`: no signer has a "
-            "wallet; `log_moved`"
-        },
-        status.HTTP_503_SERVICE_UNAVAILABLE: {
-            "description": "`vault_unavailable`: an issuer's or verifier's messaging key "
-            "could not be made, or the platform could not sign"
+            "description": "`up_to_date`: nothing to sign; `no_signers`: no signer has a wallet"
         },
     },
 )
@@ -602,44 +524,14 @@ async def sign_identity(
     body: LocaleIn,
     session: CurrentSession,
     db: DbSession,
-    vault: Annotated[Vault, Depends(get_vault)],
-) -> RequestOut | SignedOut:
+) -> RequestOut:
     identity = await db.get(Identity, identity_id)
     if identity is None or identity.tenant_id != tenant_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="identity_not_found")
     tenant = await db.get_one(Tenant, tenant_id)
-    flow_signer = await signing_flows.signs(db, tenant, session.user_id)
-    # Signed by the platform: whoever the flow names asks for it.
-    if flow_signer:
-        try:
-            if await custody.sign_entry(db, vault, identity):
-                await db.commit()
-                return SignedOut()
-        except VaultError:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, detail="vault_unavailable"
-            ) from None
-        except dids.LogMoved:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail="log_moved") from None
-    # Signed from a wallet: the flow's signers — or, moving to `none`, the
-    # old flow's, whose keys are still in force, handing over to the platform.
-    mine = set(await my_keys(db, session.user_id))
-    handing_over = tenant.signing_flow == "none" and mine & set(
-        webvh.active_update_keys(await dids.log(db, identity.id))
-    )
-    if not flow_signer and not handing_over:
+    if not await signing_flows.signs(db, tenant, session.user_id):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_a_signer")
-    # Signing an issuer or a verifier is when its messaging key is made, so
-    # the entry signed now is the one that lists it.
-    item = await messaging_keys.owner(db, identity.id)
-    if item is not None and identity.agreement_key is None:
-        try:
-            await messaging_keys.ensure(vault, item, identity)
-        except VaultError:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, detail="vault_unavailable"
-            ) from None
-        await db.commit()
+    mine = set(await my_keys(db, session.user_id))
     try:
         entry = await dids.next_entry(db, get_settings().did_url, identity)
     except webvh.LogError as error:

@@ -5,11 +5,12 @@ the holder's side)."""
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
+    Depends,
     HTTPException,
     Response,
     status,
@@ -19,7 +20,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import (
-    notices,
     paging,
     queues,
     status_lists,
@@ -34,6 +34,7 @@ from registry_api.api.routes.applications import (
 )
 from registry_api.api.routes.auth import DbSession
 from registry_api.api.routes.directory import TenantId
+from registry_api.broker import Broker, get_broker
 from registry_api.models import (
     Application,
     ApplicationFile,
@@ -208,9 +209,7 @@ async def decide(
     application_id: uuid.UUID,
     body: DecisionIn,
     db: DbSession,
-    vault: notices.VaultDep,
-    courier: notices.Courier,
-    broker: notices.BrokerDep,
+    broker: Annotated[Broker, Depends(get_broker)],
 ) -> dict[str, Any]:
     item = await received(db, tenant_id, application_id)
     if item.status != "submitted":
@@ -219,7 +218,5 @@ async def decide(
     item.decision_note = (body.note or "").strip() or None
     item.decided_at = datetime.now(UTC)
     await db.commit()
-    # The holder hears of it over DIDComm, when its wallet said where.
-    await notices.notify(db, vault, courier, item, body.decision)
     await queues.decided(db, broker, item)
     return await get_received(tenant_id, application_id, db)

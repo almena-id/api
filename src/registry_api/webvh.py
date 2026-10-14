@@ -9,9 +9,7 @@ the ``updateKeys``), and ``proof`` a Data Integrity proof (``eddsa-jcs-2022``)
 by one of the update keys in force before it.
 
 The registry builds entries and checks the proofs on them before it writes
-them to the log: people sign them in their wallets (``api/routes/wallet.py``)
-or, for a tenant whose signing flow is ``none``, the platform does
-(``custody``).
+them to the log: people sign them in their wallets (``api/routes/wallet.py``).
 
 Hashes are multihash SHA-256 in base58btc (``Qm…``), over the JSON
 Canonicalization Scheme (RFC 8785) of the entry.

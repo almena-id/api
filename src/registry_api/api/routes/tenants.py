@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from registry_api import custody, entitlements, tenant_health
+from registry_api import entitlements, tenant_health
 from registry_api.api.routes.auth import CurrentSession, DbSession
 from registry_api.api.routes.directory import IdentityRef, MediatorRef, TenantId, tenant_mediator
 from registry_api.api.routes.members import admin_of
@@ -16,7 +16,6 @@ from registry_api.api.routes.signing import Signer, signer_out
 from registry_api.field_catalog import LANGUAGES
 from registry_api.models import Identity, Mediator, Tenant, TenantMember
 from registry_api.signing_flows import Flow, signs
-from registry_api.vault import Vault, VaultError, get_vault
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
 
@@ -137,10 +136,6 @@ async def get_tenant(tenant_id: TenantId, session: CurrentSession, db: DbSession
             "`languages_invalid` (none, repeated or not the platform's), "
             "`languages_anchor` (the trust anchor works in all of them)"
         },
-        status.HTTP_503_SERVICE_UNAVAILABLE: {
-            "description": "`vault_unavailable`: the key the platform signs with under "
-            "`none` could not be made"
-        },
     },
 )
 async def update_tenant(
@@ -148,7 +143,6 @@ async def update_tenant(
     body: TenantIn,
     session: CurrentSession,
     db: DbSession,
-    vault: Annotated[Vault, Depends(get_vault)],
 ) -> TenantDetail:
     tenant = await db.get_one(Tenant, tenant_id)
     sent = body.model_fields_set
@@ -178,16 +172,7 @@ async def update_tenant(
         tenant.signer_id = None
     elif tenant.signer_id is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="signer_required")
-    # Under `none` the platform signs as the tenant, with a key of its own.
-    if tenant.signing_flow == "none" and tenant.platform_key is None:
-        try:
-            await custody.ensure(vault, tenant)
-        except VaultError:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, detail="vault_unavailable"
-            ) from None
     await db.commit()
-    await custody.settle(db, vault, tenant_id)
     await db.refresh(tenant)
     return await _detail(db, tenant, "admin", session.user_id)
 
@@ -195,9 +180,14 @@ async def update_tenant(
 class HealthCheck(BaseModel):
     check: tenant_health.Check
     done: bool
-    # What is missing, when not done: `missing` (name, mediator), `unpublished`
-    # (mediator), `no_signer`, `no_wallet` or `no_key` (signing flow).
+    # What is missing, when not done: `missing` (name, domain, mediator),
+    # `unverified` (domain), `pending` or `outdated` (identity), `unsigned`,
+    # `unpublished` or `unchosen` (mediator), `no_signer` or `no_wallet`
+    # (signing flow). The root's checks are its onboarding, in order.
     issue: tenant_health.Issue | None
+    # What the task is done on, when it is one thing: the tenant's identity,
+    # or the mediator to sign, publish or choose.
+    item: uuid.UUID | None = None
 
 
 class TenantHealth(BaseModel):
@@ -211,5 +201,8 @@ async def get_health(tenant_id: TenantId, db: DbSession) -> TenantHealth:
     results = await tenant_health.checks(db, await db.get_one(Tenant, tenant_id))
     return TenantHealth(
         score=tenant_health.score(results),
-        checks=[HealthCheck(check=r.check, done=r.issue is None, issue=r.issue) for r in results],
+        checks=[
+            HealthCheck(check=r.check, done=r.issue is None, issue=r.issue, item=r.item)
+            for r in results
+        ],
     )
