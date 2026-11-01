@@ -141,7 +141,8 @@ src/registry_api/
                      and deleted while none does; coded fields of any tenant may
                      draw on them (`domain`);
                      categories.py: the anchor's categories for fields and credential
-                     types (`anchor_only`): added, renamed, deleted while nothing is
+                     types (`anchor_only`): added, renamed, given an icon (one of
+                     `field_catalog.CATEGORY_ICONS`), deleted while nothing is
                      filed under them. Everything the anchor keeps only it changes;
                      what a tenant makes of its own only it sees and uses;
                      tenants.py: the user's tenants and one's details — name, mediator,
@@ -168,7 +169,11 @@ src/registry_api/
                      secret): start, answers, files and what they sign;
                      application_wallet.py: the wallet's pair/present/submit/receive
                      requests on the sign-in channel, and collecting an issued credential;
-                     offers.py: the public offers (`/catalog/offers`, one by one);
+                     offers.py: the public offers (`/catalog/offers`, searched by `q` and
+                     filtered by `category`; their categories with counts; an issuer's
+                     together; one by one);
+                     activity.py: a tenant's activity day by day and where it stands now
+                     (applications, credentials issued, verifications), for its overview;
                      inbox.py: the issuer's inbox, a page at a time, and deciding;
                      fields.py: the field and credential catalogues, public (`/catalog/fields`,
                      `/catalog/credentials`; outside /api/v1, on the identity domain, their

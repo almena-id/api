@@ -4,9 +4,9 @@ They are the trust anchor's (`registry_api.trust_anchor`), like the rest of the
 catalogue: every tenant sees them (`/catalog/fields`, `/catalog/credentials`)
 and files its own credential types under them, but only the anchor's members
 add, rename and delete them (`anchor_only` for any other tenant). A category
-is for fields (`kind: field`) or for credential types (`kind: credential`); its
-key never changes. One that a field or any tenant's credential type is filed
-under is not deleted.
+is for fields (`kind: field`) or for credential types (`kind: credential`) and
+is drawn with an icon of `field_catalog.CATEGORY_ICONS`; its key never changes.
+One that a field or any tenant's credential type is filed under is not deleted.
 """
 
 import re
@@ -35,12 +35,15 @@ class CategoryIn(BaseModel):
     key: str = Field(max_length=32)
     # In every language of the portal: every tenant reads them.
     labels: dict[str, str]
+    # What it is drawn with: one of `field_catalog.CATEGORY_ICONS`.
+    icon: str = Field(default=catalog.DEFAULT_ICON, max_length=32)
 
 
 class CategoryPatch(BaseModel):
-    """What changes; the kind and the key never do."""
+    """What changes; the kind and the key never do. An icon left out is kept."""
 
     labels: dict[str, str]
+    icon: str | None = Field(default=None, max_length=32)
 
 
 class CategoryOut(BaseModel):
@@ -48,6 +51,7 @@ class CategoryOut(BaseModel):
     kind: Kind
     key: str
     labels: dict[str, str]
+    icon: str
     # How many fields, or credential types of any tenant, are filed under it.
     uses: int
     created_at: datetime
@@ -73,6 +77,12 @@ def _labels(given: dict[str, str]) -> dict[str, str]:
     return kept
 
 
+def _icon(given: str) -> str:
+    if given not in catalog.CATEGORY_ICONS:
+        raise _refuse("icon_invalid")
+    return given
+
+
 async def _uses(db: AsyncSession, item: CatalogCategory) -> int:
     """Fields of the anchor's, or credential types of any tenant, filed under it."""
     if item.kind == "field":
@@ -90,6 +100,7 @@ async def _out(db: AsyncSession, item: CatalogCategory) -> CategoryOut:
         kind=cast(Kind, item.kind),
         key=item.key,
         labels=item.labels,
+        icon=item.icon,
         uses=await _uses(db, item),
         created_at=item.created_at,
         updated_at=item.updated_at,
@@ -127,7 +138,8 @@ async def list_categories(tenant_id: TenantId, db: DbSession) -> list[CategoryOu
         status.HTTP_403_FORBIDDEN: {"description": "`anchor_only`"},
         status.HTTP_409_CONFLICT: {"description": "`key_exists`: one of that kind has it"},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": "`key_invalid`, `labels_required` (every language, 100 at most)"
+            "description": "`key_invalid`, `labels_required` (every language, 100 at most), "
+            "`icon_invalid` (not one of the icons)"
         },
     },
 )
@@ -136,6 +148,7 @@ async def create_category(tenant_id: TenantId, body: CategoryIn, db: DbSession) 
     if not KEY.match(body.key):
         raise _refuse("key_invalid")
     labels = _labels(body.labels)
+    icon = _icon(body.icon)
     exists = await db.scalar(
         select(CatalogCategory.id).where(
             CatalogCategory.tenant_id == tenant_id,
@@ -150,6 +163,7 @@ async def create_category(tenant_id: TenantId, body: CategoryIn, db: DbSession) 
         kind=body.kind,
         key=body.key,
         labels=labels,
+        icon=icon,
         # Set here, to the microsecond: the catalogue is listed in this order.
         created_at=datetime.now(UTC),
     )
@@ -161,11 +175,11 @@ async def create_category(tenant_id: TenantId, body: CategoryIn, db: DbSession) 
 
 @router.patch(
     "/{category_id}",
-    summary="Rename a category (the trust anchor only); never its kind or key",
+    summary="Rename a category or change its icon (the trust anchor only); never its kind or key",
     responses={
         status.HTTP_403_FORBIDDEN: {"description": "`anchor_only`"},
         status.HTTP_404_NOT_FOUND: {"description": "`category_not_found`"},
-        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "`labels_required`"},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "`labels_required`, `icon_invalid`"},
     },
 )
 async def update_category(
@@ -173,6 +187,8 @@ async def update_category(
 ) -> CategoryOut:
     item = await _owned(db, tenant_id, category_id)
     item.labels = _labels(body.labels)
+    if body.icon is not None:
+        item.icon = _icon(body.icon)
     await db.commit()
     await db.refresh(item)
     return await _out(db, item)

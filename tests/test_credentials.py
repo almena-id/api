@@ -171,9 +171,47 @@ async def test_the_public_catalogue_lists_every_offer_page_by_page(
     assert first["credential_type"]["category"] == {
         "id": "membership",
         "labels": {"en": "Membership", "es": "Afiliación"},
+        "icon": "users",
     }
     bad = await client.get("/api/v1/catalog/offers?cursor=nope")
     assert bad.status_code == 400 and bad.json()["detail"] == "invalid_cursor"
+
+    # Searched by words, in any language and case, and filtered by category.
+    async def found(query: str) -> tuple[int, list[tuple[str, str]]]:
+        body = (await client.get(f"/api/v1/catalog/offers?{query}")).json()
+        return body["total"], [
+            (o["issuer"]["name"], o["credential_type"]["id"]) for o in body["items"]
+        ]
+
+    assert await found("q=UNION") == (2, [("Union", "employment"), ("Union", "membership")])
+    assert await found("q=relación laboral") == (1, [("Union", "employment")])
+    assert await found("category=work") == (1, [("Union", "employment")])
+    assert await found("category=membership&q=union") == (1, [("Union", "membership")])
+    assert await found("q=nothing") == (0, [])
+    # Paging keeps the filter.
+    first_page = (await client.get("/api/v1/catalog/offers?category=membership&limit=1")).json()
+    rest = (
+        await client.get(
+            f"/api/v1/catalog/offers?category=membership&limit=1&cursor={first_page['next_cursor']}"
+        )
+    ).json()
+    assert [o["issuer"]["name"] for o in first_page["items"] + rest["items"]] == ["Club", "Union"]
+    assert rest["next_cursor"] is None and rest["total"] == 2
+
+    # The categories with offers, the most offered first.
+    categories = (await client.get("/api/v1/catalog/offers/categories")).json()
+    assert [(c["id"], c["offers"], c["icon"]) for c in categories] == [
+        ("membership", 2, "users"),
+        ("work", 1, "briefcase"),
+    ]
+
+    # An issuer's page: it and its offers; none for one not published.
+    club = (await client.get(f"/api/v1/catalog/issuers/{first['issuer']['slug']}/offers")).json()
+    assert club["issuer"]["name"] == "Club"
+    assert [o["id"] for o in club["offers"]] == ["membership"]
+    assert club["offers"][0]["category"]["icon"] == "users"
+    gone = await client.get("/api/v1/catalog/issuers/iss_nobody/offers")
+    assert gone.status_code == 404 and gone.json()["detail"] == "issuer_not_found"
 
 
 async def test_the_catalogue_finds_issuers_by_what_they_grant_and_their_name(

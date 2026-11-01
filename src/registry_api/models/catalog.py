@@ -65,7 +65,7 @@ class CatalogDomain(TimestampMixin, Base):
 
 class CatalogCategory(TimestampMixin, Base):
     """A category of the anchor's catalogue, for its fields (`kind: field`) or
-    its credential types (`kind: credential`), with its labels."""
+    its credential types (`kind: credential`), with its labels and its icon."""
 
     __tablename__ = "catalog_categories"
     __table_args__ = (UniqueConstraint("tenant_id", "kind", "key"),)
@@ -77,6 +77,8 @@ class CatalogCategory(TimestampMixin, Base):
     kind: Mapped[str] = mapped_column(String(16))
     key: Mapped[str] = mapped_column(String(32))
     labels: Mapped[dict[str, str]] = mapped_column(JSON)
+    # What it is drawn with: one of `field_catalog.CATEGORY_ICONS`.
+    icon: Mapped[str] = mapped_column(String(32), default="tag", server_default="tag")
 
 
 class CatalogType(TimestampMixin, Base):

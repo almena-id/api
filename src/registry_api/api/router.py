@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from registry_api.api.routes import (
     account,
     accounts,
+    activity,
     application_wallet,
     applications,
     auth,
@@ -58,6 +59,7 @@ api_router.include_router(status_lists.credentials)
 api_router.include_router(directory.router)
 api_router.include_router(members.router)
 api_router.include_router(pending.router)
+api_router.include_router(activity.router)
 api_router.include_router(publication.router)
 api_router.include_router(publication.catalog)
 api_router.include_router(signing.router)

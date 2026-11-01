@@ -62,6 +62,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool("get_tenant", "GET", T),
     Tool("update_tenant", "PATCH", T),
     Tool("get_tenant_health", "GET", f"{T}/health"),
+    Tool("get_tenant_activity", "GET", f"{T}/activity"),
     Tool("list_members", "GET", f"{T}/members"),
     Tool("invite_member", "POST", f"{T}/invitations"),
     Tool("change_member_role", "PATCH", f"{T}/members/{{user_id}}"),
@@ -100,6 +101,8 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool("list_published", "GET", "/api/v1/catalog/{kind}"),
     Tool("list_offers", "GET", "/api/v1/catalog/offers"),
+    Tool("list_offer_categories", "GET", "/api/v1/catalog/offers/categories"),
+    Tool("get_issuer_offers", "GET", "/api/v1/catalog/issuers/{issuer_slug}/offers"),
     # Catalogues, fields and forms.
     Tool("get_field_catalogue", "GET", "/api/v1/catalog/fields"),
     Tool("get_credential_catalogue", "GET", "/api/v1/catalog/credentials"),

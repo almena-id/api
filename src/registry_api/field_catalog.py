@@ -31,6 +31,33 @@ VERSION = "v1"
 LANGUAGES = ("en", "es")
 
 Labels = dict[str, str]
+# What a category may be drawn with: names the portals and the wallet draw
+# (Lucide's), nothing else; `tag` when none was chosen.
+CATEGORY_ICONS = (
+    "tag",
+    "user",
+    "id-card",
+    "house",
+    "mail",
+    "phone",
+    "file-text",
+    "folder",
+    "graduation-cap",
+    "briefcase",
+    "users",
+    "award",
+    "badge-check",
+    "shield",
+    "heart-pulse",
+    "car",
+    "landmark",
+    "building",
+    "globe",
+    "key",
+    "plane",
+    "wallet",
+)
+DEFAULT_ICON = "tag"
 FieldType = Literal["text", "email", "phone", "date", "code", "codes", "file", "group"]
 # How a form may make a field stricter, by type; nothing may make it looser.
 NARROWING: dict[str, set[str]] = {
@@ -280,15 +307,28 @@ def _code_out(code: Code) -> dict[str, Any]:
     return out
 
 
+def categories_out(
+    categories: dict[str, Labels], icons: dict[str, str] | None
+) -> list[dict[str, Any]]:
+    """Categories as served: each with its labels and what it is drawn with."""
+    return [
+        {"id": key, "labels": labels, "icon": (icons or {}).get(key, DEFAULT_ICON)}
+        for key, labels in categories.items()
+    ]
+
+
 def catalogue_out(
-    fields: list[Field], domains: dict[str, Domain], categories: dict[str, Labels]
+    fields: list[Field],
+    domains: dict[str, Domain],
+    categories: dict[str, Labels],
+    icons: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """The catalogue as served: its fields in order, their categories and the
     value domains they draw on."""
     return {
         "version": VERSION,
         "languages": list(LANGUAGES),
-        "categories": [{"id": key, "labels": labels} for key, labels in categories.items()],
+        "categories": categories_out(categories, icons),
         "fields": [field_out(item) for item in fields],
         "domains": {
             domain.id: {

@@ -21,6 +21,7 @@ its members add to it.
 import json
 import uuid
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
@@ -57,16 +58,26 @@ class Catalogue:
     field_categories: dict[str, catalog.Labels]
     types: dict[str, credentials.CredentialType]
     type_categories: dict[str, catalog.Labels]
+    # What each category is drawn with, by key.
+    field_icons: dict[str, str] = dataclass_field(default_factory=dict)
+    type_icons: dict[str, str] = dataclass_field(default_factory=dict)
+
+    def type_icon(self, category: str) -> str:
+        return self.type_icons.get(category, catalog.DEFAULT_ICON)
 
     def anchor_fields(self) -> list[catalog.Field]:
         """The anchor's fields, in the catalogue's order."""
         return [item for item in self.fields.values() if item.published]
 
     def fields_out(self) -> dict[str, Any]:
-        return catalog.catalogue_out(self.anchor_fields(), self.domains, self.field_categories)
+        return catalog.catalogue_out(
+            self.anchor_fields(), self.domains, self.field_categories, self.field_icons
+        )
 
     def types_out(self) -> dict[str, Any]:
-        return credentials.catalogue_out(list(self.types.values()), self.type_categories)
+        return credentials.catalogue_out(
+            list(self.types.values()), self.type_categories, self.type_icons
+        )
 
 
 async def anchor_id(db: AsyncSession) -> uuid.UUID | None:
@@ -125,6 +136,8 @@ async def _load(db: AsyncSession, tenant_id: uuid.UUID | None) -> Catalogue:
     domains: dict[str, catalog.Domain] = {}
     field_categories: dict[str, catalog.Labels] = {}
     type_categories: dict[str, catalog.Labels] = {}
+    field_icons: dict[str, str] = {}
+    type_icons: dict[str, str] = {}
     found: dict[str, catalog.Field] = {}
     types: dict[str, credentials.CredentialType] = {}
     if anchor is not None:
@@ -144,8 +157,9 @@ async def _load(db: AsyncSession, tenant_id: uuid.UUID | None) -> Catalogue:
             .where(CatalogCategory.tenant_id == anchor)
             .order_by(CatalogCategory.created_at, CatalogCategory.key)
         ):
-            kept = field_categories if category.kind == "field" else type_categories
-            kept[category.key] = category.labels
+            of_fields = category.kind == "field"
+            (field_categories if of_fields else type_categories)[category.key] = category.labels
+            (field_icons if of_fields else type_icons)[category.key] = category.icon
         for item in await db.scalars(
             select(CatalogField)
             .where(CatalogField.tenant_id == anchor)
@@ -172,7 +186,9 @@ async def _load(db: AsyncSession, tenant_id: uuid.UUID | None) -> Catalogue:
             .order_by(CatalogType.created_at, CatalogType.key)
         ):
             types[PREFIX + kind.key] = credentials.type_from(type_data(kind), slug)
-    return Catalogue(found, domains, field_categories, types, type_categories)
+    return Catalogue(
+        found, domains, field_categories, types, type_categories, field_icons, type_icons
+    )
 
 
 @cache

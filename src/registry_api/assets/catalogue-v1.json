@@ -7,7 +7,8 @@
    "labels": {
     "en": "Person",
     "es": "Persona"
-   }
+   },
+   "icon": "user"
   },
   {
    "kind": "field",
@@ -15,7 +16,8 @@
    "labels": {
     "en": "Contact",
     "es": "Contacto"
-   }
+   },
+   "icon": "mail"
   },
   {
    "kind": "field",
@@ -23,7 +25,8 @@
    "labels": {
     "en": "Documents",
     "es": "Documentos"
-   }
+   },
+   "icon": "file-text"
   },
   {
    "kind": "field",
@@ -31,7 +34,8 @@
    "labels": {
     "en": "Education and work",
     "es": "Formación y trabajo"
-   }
+   },
+   "icon": "graduation-cap"
   },
   {
    "kind": "field",
@@ -39,7 +43,8 @@
    "labels": {
     "en": "Membership",
     "es": "Afiliación"
-   }
+   },
+   "icon": "users"
   },
   {
    "kind": "field",
@@ -47,7 +52,8 @@
    "labels": {
     "en": "Files",
     "es": "Ficheros"
-   }
+   },
+   "icon": "folder"
   },
   {
    "kind": "credential",
@@ -55,7 +61,8 @@
    "labels": {
     "en": "Identity",
     "es": "Identidad"
-   }
+   },
+   "icon": "id-card"
   },
   {
    "kind": "credential",
@@ -63,7 +70,8 @@
    "labels": {
     "en": "Contact",
     "es": "Contacto"
-   }
+   },
+   "icon": "mail"
   },
   {
    "kind": "credential",
@@ -71,7 +79,8 @@
    "labels": {
     "en": "Education",
     "es": "Formación"
-   }
+   },
+   "icon": "graduation-cap"
   },
   {
    "kind": "credential",
@@ -79,7 +88,8 @@
    "labels": {
     "en": "Work",
     "es": "Trabajo"
-   }
+   },
+   "icon": "briefcase"
   },
   {
    "kind": "credential",
@@ -87,7 +97,8 @@
    "labels": {
     "en": "Membership",
     "es": "Afiliación"
-   }
+   },
+   "icon": "users"
   }
  ],
  "domains": [

@@ -26,15 +26,15 @@ async def test_the_anchor_keeps_the_categories(client: AsyncClient, outbox: Outb
         ("credential", "identity"),
     }
     person = next(item for item in seeded if item["key"] == "person")
-    assert person["uses"] > 0
+    assert person["uses"] > 0 and person["icon"] == "user"
 
     # A field category: filed under, published, then emptied and deleted.
     health = await _post(
         client, headers, base, {"kind": "field", "key": "health", "labels": LABELS}
     )
-    assert health["uses"] == 0
+    assert health["uses"] == 0 and health["icon"] == "tag"
     published = (await client.get("/api/v1/catalog/fields")).json()["categories"]
-    assert published[-1] == {"id": "health", "labels": LABELS}
+    assert published[-1] == {"id": "health", "labels": LABELS, "icon": "tag"}
     field = await _post(
         client,
         headers,
@@ -52,6 +52,15 @@ async def test_the_anchor_keeps_the_categories(client: AsyncClient, outbox: Outb
         url, json={"labels": {"en": "Health care", "es": "Sanidad"}}, headers=headers
     )
     assert renamed.status_code == 200 and renamed.json()["uses"] == 1
+    # The icon changes on its own, and stays when only the labels do.
+    drawn = await client.patch(
+        url, json={"labels": renamed.json()["labels"], "icon": "heart-pulse"}, headers=headers
+    )
+    assert drawn.status_code == 200 and drawn.json()["icon"] == "heart-pulse"
+    again = await client.patch(url, json={"labels": LABELS}, headers=headers)
+    assert again.json()["icon"] == "heart-pulse"
+    unknown = await client.patch(url, json={"labels": LABELS, "icon": "skull"}, headers=headers)
+    assert unknown.status_code == 422 and unknown.json()["detail"] == "icon_invalid"
     kept = await client.delete(url, headers=headers)
     assert kept.status_code == 409 and kept.json()["detail"] == "category_in_use"
     await client.delete(f"/api/v1/tenants/{anchor}/fields/{field['id']}", headers=headers)
@@ -71,6 +80,7 @@ async def test_the_anchor_keeps_the_categories(client: AsyncClient, outbox: Outb
     for body, code in (
         ({"kind": "field", "key": "Health", "labels": LABELS}, "key_invalid"),
         ({"kind": "field", "key": "care", "labels": {"en": "Care"}}, "labels_required"),
+        ({"kind": "field", "key": "care", "labels": LABELS, "icon": "nope"}, "icon_invalid"),
     ):
         response = await client.post(base, json=body, headers=headers)
         assert response.status_code == 422 and response.json()["detail"] == code

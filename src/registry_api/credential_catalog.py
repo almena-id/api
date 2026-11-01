@@ -228,11 +228,15 @@ def type_out(item: CredentialType) -> dict[str, Any]:
     return out
 
 
-def catalogue_out(types: list[CredentialType], categories: dict[str, Labels]) -> dict[str, Any]:
+def catalogue_out(
+    types: list[CredentialType],
+    categories: dict[str, Labels],
+    icons: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """The catalogue as served: its types in order and their categories."""
     return {
         "version": VERSION,
         "languages": list(fields.LANGUAGES),
-        "categories": [{"id": key, "labels": labels} for key, labels in categories.items()],
+        "categories": fields.categories_out(categories, icons),
         "types": [type_out(item) for item in types],
     }
