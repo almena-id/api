@@ -3,12 +3,13 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from scalar_fastapi import add_scalar_reference
 
-from registry_api import __version__, errors, housekeeping
+from registry_api import __version__, errors, housekeeping, refusals
 from registry_api.api.router import api_router
 from registry_api.api.routes import (
     did_documents,
@@ -74,6 +75,17 @@ def create_app() -> FastAPI:
     app.include_router(status_lists.public)
     app.include_router(api_router)
     app.include_router(mcp.router)
+
+    generate = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        # What every refusal code and presentation problem means (refusals.py).
+        schema = generate()
+        schema.setdefault("x-refusals", refusals.REFUSALS)
+        schema.setdefault("x-presentation-problems", refusals.PROBLEMS)
+        return schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
     return app
 
 

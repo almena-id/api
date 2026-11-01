@@ -17,6 +17,10 @@ src/registry_api/
   security.py        sign-in codes and session tokens (both stored as SHA-256)
   errors.py          `Refusal`: every error is `{"detail": "<code>"}`, what more says why
                      beside it (`field`, `credential`, `errors`); never an object in `detail`
+  refusals.py        what every refusal code (`REFUSALS`) and presentation problem
+                     (`PROBLEMS`) means, published in the OpenAPI document (`x-refusals`,
+                     `x-presentation-problems`) for the documentation; a new code goes in
+                     here, in the same change (`tests/test_refusals.py` reads the source)
   paging.py          keyset paging, newest first: `Limit`, `Cursor`, `encode`/`decode`, `after`
   housekeeping.py    sweeping what has run out, every `REGISTRY_HOUSEKEEPING_MINUTES` (the
                      app's lifespan runs it); the one place that deletes expired rows
