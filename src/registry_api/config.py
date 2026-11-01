@@ -1,11 +1,19 @@
 """Settings, read from ``REGISTRY_*`` environment variables (and ``.env``)."""
 
+import re
 from functools import lru_cache
 from ipaddress import ip_address
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, IPvAnyAddress, PostgresDsn, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, IPvAnyAddress, PostgresDsn, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# An Apple app: its team (ten characters) and bundle identifier.
+_APPLE_APP_ID = r"[A-Z0-9]{10}\.[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*"
+# An Android application id: dot-separated Java identifiers, two at least.
+_ANDROID_PACKAGE = r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$"
+# A certificate's SHA-256 fingerprint as keytool and Play Console print it.
+_FINGERPRINT = r"[0-9A-F]{2}(:[0-9A-F]{2}){31}"
 
 
 class Settings(BaseSettings):
@@ -126,6 +134,48 @@ class Settings(BaseSettings):
     apple_team_id: str = ""
     apple_key_id: str = ""
     apple_private_key: SecretStr = SecretStr("")
+
+    # The wallet's links on the identity domain (`{did_url}/w/…`, universal
+    # links and verified App Links): the apps that may open them. Apple's
+    # `{team}.{bundle id}`, served in /.well-known/apple-app-site-association;
+    # Android's package and the SHA-256 fingerprints of the certificates its
+    # builds are signed with (Play App Signing's key, and the upload or debug
+    # key to try a build of one's own), in /.well-known/assetlinks.json. Both
+    # comma-separated; no fingerprint serves an empty list, so Android never
+    # verifies the links and leaves them to the browser.
+    apple_app_ids: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["XDUFSW425R.id.almena.wallet"]
+    )
+    android_package: str = Field(default="id.almena.wallet", pattern=_ANDROID_PACKAGE)
+    android_app_fingerprints: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Where someone without the wallet learns how to get it: the page at
+    # `{did_url}/w/…` links it.
+    wallet_url: str = "https://docs.almena.id/use/wallet/"
+
+    @field_validator("apple_app_ids", "android_app_fingerprints", mode="before")
+    @classmethod
+    def _comma_separated(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+    @field_validator("apple_app_ids")
+    @classmethod
+    def _apple_app_ids(cls, value: list[str]) -> list[str]:
+        for app_id in value:
+            if not re.fullmatch(_APPLE_APP_ID, app_id):
+                raise ValueError(f"not a {{team id}}.{{bundle id}}: {app_id!r}")
+        return value
+
+    @field_validator("android_app_fingerprints")
+    @classmethod
+    def _android_app_fingerprints(cls, value: list[str]) -> list[str]:
+        for fingerprint in value:
+            if not re.fullmatch(_FINGERPRINT, fingerprint):
+                raise ValueError(
+                    f"not a SHA-256 fingerprint (AA:BB:…, 32 uppercase pairs): {fingerprint!r}"
+                )
+        return value
 
     @model_validator(mode="after")
     def _safe_in_production(self) -> "Settings":

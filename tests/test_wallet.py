@@ -42,6 +42,10 @@ async def _ask(
 async def _answer(client: AsyncClient, asked: dict[str, Any], wallet: FakeWallet) -> int:
     uri = request_uri(asked["deep_link"])
     assert uri == asked["request_uri"]
+    # An https link on the identity domain, and the same as almena://.
+    links = f"{get_settings().did_url}/w/"
+    assert asked["deep_link"].startswith(f"{links}auth?request_uri=")
+    assert asked["scheme_link"] == "almena://" + asked["deep_link"].removeprefix(links)
     request = (await client.get(uri)).json()
     assert request["client_id"] == "http://portal.test"
     answer = await client.post(request["response_uri"], data={"id_token": wallet.id_token(request)})

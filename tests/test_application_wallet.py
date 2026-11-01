@@ -57,11 +57,14 @@ async def test_the_catalog_polls_and_the_wallet_reads_once(
     pairing = await _ask(client, base, secret, "pair")
     state = (await client.get(f"{base}/wallet", headers=secret)).json()
     assert state["purpose"] == "pair" and state["live"] is True and state["deep_link"]
+    assert state["deep_link"].startswith("https://almena.id/w/auth?request_uri=")
+    assert state["scheme_link"].startswith("almena://auth?request_uri=")
     assert state["answered"] is False
     path = urlparse(pairing["response_uri"]).path
     await client.post(path, data={"id_token": FakeWallet().id_token(pairing)})
     state = (await client.get(f"{base}/wallet", headers=secret)).json()
     assert state["answered"] is True and state["deep_link"] is None
+    assert state["scheme_link"] is None
     read = await client.get(path.removesuffix("/response"))
     assert read.status_code == 409 and read.json()["detail"] == "already_answered"
     # The poll is the secret holder's alone.

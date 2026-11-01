@@ -73,6 +73,8 @@ async def test_a_verifier_asks_by_qr_and_sees_the_verdict(
     verification = opened.json()
     assert verification["status"] == "pending" and verification["result"] is None
     assert verification["verifier"]["name"] == "Door"
+    assert verification["deep_link"].startswith("https://almena.id/w/auth?request_uri=")
+    assert verification["scheme_link"].startswith("almena://auth?request_uri=")
 
     # What the wallet reads: who asks, and the DCQL query of the form.
     request = await _request(client, verification["deep_link"])
@@ -101,6 +103,7 @@ async def test_a_verifier_asks_by_qr_and_sees_the_verdict(
 
     seen = (await client.get(f"{base}/verifications/{verification['id']}", headers=headers)).json()
     assert seen["status"] == "answered" and seen["deep_link"] is None
+    assert seen["scheme_link"] is None
     assert seen["result"]["verified"] is True
     credential = seen["result"]["credentials"][0]
     assert credential["issuer"] == club.did

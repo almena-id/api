@@ -33,7 +33,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, cast
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -107,9 +107,12 @@ class LocaleIn(BaseModel):
 
 class RequestOut(BaseModel):
     id: uuid.UUID
-    # Where the wallet reads the request; `deep_link` carries it for the QR code.
+    # Where the wallet reads the request; `deep_link` carries it for the QR code
+    # and the "Open in the wallet" button, an https link on the identity domain
+    # only the wallet can claim; `scheme_link` is the same as almena://.
     request_uri: str
     deep_link: str
+    scheme_link: str
     # The portal's alone: it turns the answer into a session.
     poll: str
     expires_at: datetime
@@ -261,7 +264,8 @@ async def _new_request(
     return RequestOut(
         id=found.id,
         request_uri=uri,
-        deep_link=f"almena://auth?request_uri={quote(uri, safe='')}",
+        deep_link=wallet.universal_link(uri),
+        scheme_link=wallet.scheme_link(uri),
         poll=poll,
         expires_at=found.expires_at,
     )

@@ -18,7 +18,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
@@ -63,8 +63,10 @@ class VerificationOut(BaseModel):
     verifier: dict[str, str]
     form: dict[str, Any]
     expires_at: datetime
-    # While pending: what the code says.
+    # While pending: what the code says, as https (`deep_link`, the QR code)
+    # and as the wallet's own scheme (`scheme_link`, almena://).
     deep_link: str | None
+    scheme_link: str | None
     answered_at: datetime | None
     # Once answered: the verdict, as `…/forms/{id}/verify` gives it.
     result: VerifyOut | None
@@ -97,9 +99,8 @@ async def _out(db: DbSession, item: Verification) -> VerificationOut:
         },
         form={"id": str(form.id), "name": form.name},
         expires_at=item.expires_at,
-        deep_link=f"almena://auth?request_uri={quote(_request_uri(item), safe='')}"
-        if state == "pending"
-        else None,
+        deep_link=wallet.universal_link(_request_uri(item)) if state == "pending" else None,
+        scheme_link=wallet.scheme_link(_request_uri(item)) if state == "pending" else None,
         answered_at=item.answered_at,
         result=VerifyOut.model_validate(item.result) if item.result is not None else None,
     )

@@ -12,6 +12,7 @@ from scalar_fastapi import add_scalar_reference
 from registry_api import __version__, bodies, errors, housekeeping, refusals
 from registry_api.api.router import api_router
 from registry_api.api.routes import (
+    app_links,
     did_documents,
     fields,
     health,
@@ -73,6 +74,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(did_documents.router)
     app.include_router(well_known.router)
+    app.include_router(app_links.router)
     app.include_router(fields.router)
     app.include_router(status_lists.public)
     app.include_router(api_router)

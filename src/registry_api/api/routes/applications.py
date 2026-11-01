@@ -11,7 +11,7 @@ here, and need none:
    secret, which it keeps; every holder-side call carries it
    (``X-Application-Secret``).
 2. **Pair** (QR 1): the catalog asks for a wallet request (``…/wallet``,
-   `pair`) and shows it as ``almena://auth?request_uri=…``. The wallet reads it
+   `pair`) and shows it as ``https://almena.id/w/auth?request_uri=…``. The wallet reads it
    (``GET /applications/{id}/request``) and answers by ``direct_post`` with an
    ``id_token`` by the `did:key` it keeps for this issuer: the application is
    then that holder's, once and for all.
@@ -50,7 +50,6 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
-from urllib.parse import quote
 
 import jwt
 from fastapi import (
@@ -220,9 +219,9 @@ def filled_by_credentials(item: Application) -> dict[str, Any]:
     return values
 
 
-def deep_link(item: Application) -> str:
-    uri = wallet.channel_url(f"/applications/{item.id}/request")
-    return f"almena://auth?request_uri={quote(uri, safe='')}"
+def links(item: Application) -> dict[str, str]:
+    """The request as ``deep_link`` (https) and ``scheme_link`` (``almena://``)."""
+    return wallet.links(wallet.channel_url(f"/applications/{item.id}/request"))
 
 
 async def view(db: AsyncSession, item: Application) -> dict[str, Any]:
@@ -244,7 +243,11 @@ async def view(db: AsyncSession, item: Application) -> dict[str, Any]:
             "purpose": item.wallet_purpose,
             "answered": item.wallet_answered,
             "live": live,
-            "deep_link": deep_link(item) if live and not item.wallet_answered else None,
+            **(
+                links(item)
+                if live and not item.wallet_answered
+                else {"deep_link": None, "scheme_link": None}
+            ),
             "expires_at": item.wallet_expires_at.isoformat() if item.wallet_expires_at else None,
         },
         "submitted_at": item.submitted_at.isoformat() if item.submitted_at else None,

@@ -130,9 +130,13 @@ def _key(path: Path) -> Ed25519PrivateKey:
 
 def main() -> None:
     if len(sys.argv) != 2:
-        sys.exit("usage: task wallet -- '<almena://auth?request_uri=… or the request URI>'")
+        sys.exit(
+            "usage: task wallet -- "
+            "'<https://almena.id/w/auth?request_uri=…, almena://auth?… or the request URI>'"
+        )
     given = sys.argv[1]
-    uri = request_uri(given) if given.startswith("almena:") else given
+    # The link (https or almena://) carries the request's address; or it is the address.
+    uri = request_uri(given) if "request_uri=" in given else given
     wallet = FakeWallet(_key(Path(".fake-wallet-key")))
     with httpx.Client(timeout=10) as http:
         request = http.get(uri).raise_for_status().json()

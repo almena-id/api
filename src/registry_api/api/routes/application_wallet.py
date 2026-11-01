@@ -40,9 +40,9 @@ from registry_api.api.routes.applications import (
     client_id,
     content,
     content_digest,
-    deep_link,
     files_of,
     filled_by_credentials,
+    links,
     paired,
     parts,
     view,
@@ -167,7 +167,7 @@ async def collect(application_id: uuid.UUID, body: CollectIn, db: DbSession) -> 
     await db.commit()
     return {
         "request_uri": wallet.channel_url(f"/applications/{item.id}/request"),
-        "deep_link": deep_link(item),
+        **links(item),
         "expires_at": item.wallet_expires_at.isoformat(),
     }
 

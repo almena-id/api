@@ -82,6 +82,8 @@ async def test_the_holder_collects_its_issued_credential(
 
     collected = await client.post(url, json={"id_token": holder.id_token(asked)})
     assert collected.status_code == 200, collected.text
+    assert collected.json()["deep_link"].startswith("https://almena.id/w/auth?")
+    assert collected.json()["scheme_link"].startswith("almena://auth?")
     receive = await _request(client, collected.json()["deep_link"])
     assert receive["purpose"] == "receive"
     taken = await client.post(

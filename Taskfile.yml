@@ -80,7 +80,7 @@ tasks:
     interactive: true
 
   wallet:
-    desc: "Answer a wallet request as a stand-in wallet (task wallet -- 'almena://auth?request_uri=…')"
+    desc: "Answer a wallet request as a stand-in wallet (task wallet -- 'https://almena.id/w/auth?request_uri=…')"
     deps: [install]
     requires:
       vars: [CLI_ARGS]

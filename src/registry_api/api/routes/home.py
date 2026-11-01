@@ -48,7 +48,7 @@ _MARK = (
 BRAND = "#e0413a"
 
 
-def _mark(size: int) -> str:
+def mark(size: int) -> str:
     return _MARK.format(size=size)
 
 
@@ -81,8 +81,8 @@ def page(*, ready: bool, version: str, settings: Settings, year: int) -> str:
     return _TEMPLATE.substitute(
         favicon=FAVICON,
         css=_CSS,
-        logo=_mark(28),
-        small=_mark(18),
+        logo=mark(28),
+        small=mark(18),
         state=state,
         label=label,
         version=escape(version),
@@ -116,5 +116,10 @@ async def font(name: str) -> Response:
     return Response(
         data,
         media_type="font/woff2",
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        # The page behind the wallet's links (app_links.py) is on the identity
+        # domain and loads them from here, across origins.
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Access-Control-Allow-Origin": "*",
+        },
     )

@@ -1,6 +1,7 @@
 """Answers from an Almena wallet: a self-issued ID token, as SIOPv2 shapes it.
 
-The portal shows a request (QR code or ``almena://auth?request_uri=…``); the
+The portal shows a request (QR code or ``https://almena.id/w/auth?request_uri=…``,
+the ``almena://auth?request_uri=…`` link on the identity domain); the
 wallet fetches it, the person approves, and the wallet posts back
 (``direct_post``) an ``id_token`` signed with the key it keeps for this
 registry. The token is a JWS whose issuer and subject are that key's
@@ -15,6 +16,7 @@ to run. The edge sends those paths to this API.
 """
 
 import time
+from urllib.parse import quote
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -31,6 +33,32 @@ LEEWAY = 300
 def channel_url(path: str) -> str:
     """An address the wallet reads or answers, ``path`` under /api/v1."""
     return f"{get_settings().did_url.rstrip('/')}/api/v1{path}"
+
+
+# The wallet's own scheme, and where its links live on the identity domain:
+# `{did_url}/w/<what follows almena://>`, which the wallet claims on a phone
+# (iOS universal links, Android verified App Links) and the API answers with
+# a page for whoever opens it without the wallet (routes/app_links.py).
+SCHEME = "almena://"
+LINK_PREFIX = "/w/"
+
+
+def scheme_link(request_uri: str) -> str:
+    """A request as the wallet's own scheme: ``almena://auth?request_uri=…``."""
+    return f"{SCHEME}auth?request_uri={quote(request_uri, safe='')}"
+
+
+def universal_link(request_uri: str) -> str:
+    """The same request as an https link on the identity domain, which only
+    the wallet can claim: ``https://almena.id/w/auth?request_uri=…``."""
+    rest = scheme_link(request_uri).removeprefix(SCHEME)
+    return f"{get_settings().did_url.rstrip('/')}{LINK_PREFIX}{rest}"
+
+
+def links(request_uri: str) -> dict[str, str]:
+    """What a request is shown as: ``deep_link``, the https form (QR codes
+    and "Open in the wallet"), and ``scheme_link``, the ``almena://`` one."""
+    return {"deep_link": universal_link(request_uri), "scheme_link": scheme_link(request_uri)}
 
 
 class WalletError(Exception):

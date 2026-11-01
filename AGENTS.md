@@ -97,7 +97,10 @@ src/registry_api/
   wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token;
                      `channel_url`: every address the wallet reads or answers (sign-in, sign,
                      applications, collect, verifications) is on the identity domain
-                     (`did_url`), since the wallet's key follows the origin it reads from
+                     (`did_url`), since the wallet's key follows the origin it reads from;
+                     `links`: a request shown as `deep_link`, the https link on the identity
+                     domain (`{did_url}/w/<what follows almena://>`, which only the wallet
+                     can claim), and `scheme_link`, the same as `almena://`
   didcomm.py         reading the did:peer:2 a holder's wallet names at pairing (kept on the
                      application; nothing is sent to it)
   broker/            the message broker issuers' and verifiers' back offices read from:
@@ -116,7 +119,11 @@ src/registry_api/
   api/routes/        one module per resource (home.py, the browser page at `/` in red
                      with its typefaces at `/fonts/` from `assets/fonts`; health.py and did_documents.py,
                      the public did.json, and well_known.py, the root's
-                     did.json, the did-configuration.json served from disk and security.txt, live outside /api/v1);
+                     did.json, the did-configuration.json served from disk, security.txt and
+                     the wallet's apple-app-site-association and assetlinks.json (from the
+                     settings), live outside /api/v1; app_links.py, the page at `/w/…` for a
+                     wallet link opened without the wallet: no script, a CSP with the hash
+                     of its style sheet, the link offered as `almena://`, everything escaped);
                      auth.py holds `current_session`, the dependency for signed-in routes;
                      account.py: the account's ways in (email, provider accounts), linked
                      and unlinked, and the move out of an empty account;

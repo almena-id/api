@@ -20,6 +20,11 @@ services:
       REGISTRY_CORS_ORIGINS: ${REGISTRY_CORS_ORIGINS:-["https://registry.almena.id"]}
       # /.well-known/did.json and did-configuration.json, from ./well-known.
       REGISTRY_WELL_KNOWN_DIR: /app/well-known
+      # The apps that open the wallet's links on the identity domain (/w/…).
+      REGISTRY_APPLE_APP_IDS: ${REGISTRY_APPLE_APP_IDS:-XDUFSW425R.id.almena.wallet}
+      REGISTRY_ANDROID_PACKAGE: ${REGISTRY_ANDROID_PACKAGE:-id.almena.wallet}
+      REGISTRY_ANDROID_APP_FINGERPRINTS: ${REGISTRY_ANDROID_APP_FINGERPRINTS:-}
+      REGISTRY_WALLET_URL: ${REGISTRY_WALLET_URL:-https://docs.almena.id/use/wallet/}
       REGISTRY_DNS_RESOLVERS: ${REGISTRY_DNS_RESOLVERS:-["1.1.1.1","8.8.8.8"]}
       # Docker's networks: trust X-Forwarded-* from a reverse proxy on them.
       REGISTRY_FORWARDED_ALLOW_IPS: ${REGISTRY_FORWARDED_ALLOW_IPS:-172.16.0.0/12}

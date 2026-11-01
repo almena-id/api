@@ -8,6 +8,11 @@ exists (``registry-api init-root``) and one of its admins has signed it.
 DID's key, which the API does not hold, so it is produced elsewhere and served
 as it is from ``REGISTRY_WELL_KNOWN_DIR``. ``security.txt`` (RFC 9116) says
 where to report a vulnerability, for the identity domain and the API's own.
+
+``apple-app-site-association`` and ``assetlinks.json`` name the apps that may
+open the wallet's links on this domain (``/w/…``, `registry_api.wallet`): iOS
+universal links and Android's verified App Links, so no other app can claim
+them the way any can claim ``almena://``. Both come from the settings.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -17,7 +22,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 
-from registry_api import dids, webvh
+from registry_api import dids, wallet, webvh
 from registry_api.api.routes.auth import DbSession
 from registry_api.api.routes.did_documents import log_response, web_response
 from registry_api.config import get_settings
@@ -70,6 +75,56 @@ async def did_configuration() -> FileResponse:
     if path is None or not path.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="not_found")
     return FileResponse(path, media_type="application/json")
+
+
+@router.get(
+    "/apple-app-site-association",
+    summary="The apps that open the wallet's links on this domain (iOS universal links)",
+    tags=["wallet"],
+    response_model=dict[str, Any],
+)
+async def apple_app_site_association() -> JSONResponse:
+    # No extension, served as JSON and never redirected: Apple's CDN fetches
+    # it from https://{domain}/.well-known/ and takes nothing else.
+    settings = get_settings()
+    return JSONResponse(
+        {
+            "applinks": {
+                "details": [
+                    {
+                        "appIDs": settings.apple_app_ids,
+                        "components": [{"/": f"{wallet.LINK_PREFIX}*"}],
+                    }
+                ]
+            }
+        }
+    )
+
+
+@router.get(
+    "/assetlinks.json",
+    summary="The apps that open the wallet's links on this domain (Android App Links)",
+    tags=["wallet"],
+    response_model=list[dict[str, Any]],
+)
+async def assetlinks() -> JSONResponse:
+    # Without a fingerprint, an empty list: valid, and Android verifies nothing.
+    settings = get_settings()
+    statements = (
+        [
+            {
+                "relation": ["delegate_permission/common.handle_all_urls"],
+                "target": {
+                    "namespace": "android_app",
+                    "package_name": settings.android_package,
+                    "sha256_cert_fingerprints": settings.android_app_fingerprints,
+                },
+            }
+        ]
+        if settings.android_app_fingerprints
+        else []
+    )
+    return JSONResponse(statements)
 
 
 @router.get(
