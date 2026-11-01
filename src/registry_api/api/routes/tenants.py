@@ -180,14 +180,17 @@ async def update_tenant(
 class HealthCheck(BaseModel):
     check: tenant_health.Check
     done: bool
-    # What is missing, when not done: `missing` (name, domain, mediator),
-    # `unverified` (domain), `pending` or `outdated` (identity), `unsigned`,
-    # `unpublished` or `unchosen` (mediator), `no_signer` or `no_wallet`
-    # (signing flow). The root's checks are its onboarding, in order.
+    # What is missing, when not done: `missing` (name, domain, mediator,
+    # queues, published), `unverified` (domain), `pending` or `outdated`
+    # (identity), `unsigned`, `unpublished` or `unchosen` (mediator),
+    # `no_signer` or `no_wallet` (signing flow, signers), `unsigned` or
+    # `stale` (status lists), `unpublished` (published). The root's first
+    # checks are its onboarding, in order.
     issue: tenant_health.Issue | None
     # What the task is done on, when it is one thing: the tenant's identity,
-    # or the mediator to sign, publish or choose.
+    # the mediator to sign, publish or choose, the issuer or verifier to fix.
     item: uuid.UUID | None = None
+    item_kind: tenant_health.ItemKind | None = None
 
 
 class TenantHealth(BaseModel):
@@ -202,7 +205,13 @@ async def get_health(tenant_id: TenantId, db: DbSession) -> TenantHealth:
     return TenantHealth(
         score=tenant_health.score(results),
         checks=[
-            HealthCheck(check=r.check, done=r.issue is None, issue=r.issue, item=r.item)
+            HealthCheck(
+                check=r.check,
+                done=r.issue is None,
+                issue=r.issue,
+                item=r.item,
+                item_kind=r.item_kind,
+            )
             for r in results
         ],
     )

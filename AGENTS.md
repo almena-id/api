@@ -21,6 +21,9 @@ src/registry_api/
                      (`PROBLEMS`) means, published in the OpenAPI document (`x-refusals`,
                      `x-presentation-problems`) for the documentation; a new code goes in
                      here, in the same change (`tests/test_refusals.py` reads the source)
+  bodies.py          request bodies read as they arrive, never whole first: `BodyLimit`
+                     (every request, `MOST`) and `read` (a route's own, smaller limit);
+                     past it, `413 body_too_large` with `max_bytes`
   paging.py          keyset paging, newest first: `Limit`, `Cursor`, `encode`/`decode`, `after`
   housekeeping.py    sweeping what has run out, every `REGISTRY_HOUSEKEEPING_MINUTES` (the
                      app's lifespan runs it); the one place that deletes expired rows
@@ -77,16 +80,19 @@ src/registry_api/
                      indexes, whether a list must be signed (again)
   presentations.py   verifying presented credentials (SD-JWT VC, W3C JWT VC/VP): issuer
                      signature by registry DID, the form's trust, type, validity, status
-                     lists (`get_status_fetch`, overridden in tests), holder binding, claims
+                     lists (the registry's own from the database; others by `fetch_status`:
+                     https to public addresses only, size-capped, bounded inflation;
+                     `get_status_fetch`, overridden in tests), holder binding, claims
   field_catalog.py   what a field is (the fields are data: the anchor's, everyone's, and each
                      tenant's own): types, groups, value domains, narrowing, the JSON Schema
                      an answer meets and the catalogue as served. A new field of Almena's is
                      added by the anchor (`POST …/fields`), never here
   tenant_health.py   a tenant's health: the checks it must pass to operate (name, mediator,
-                     signing flow) and its score; the root's are its onboarding in order
-                     (name, signing flow, domain, identity, its own mediator: created,
-                     signed, published, chosen), each with the item it is done on; new
-                     checks go here
+                     signing flow; with issuers or verifiers, their signers, status lists
+                     and queues; something published) and its score; the root's start
+                     with its onboarding in order (name, signing flow, domain, identity,
+                     its own mediator: created, signed, published, chosen), each with the
+                     item it is done on (`item`, `item_kind`); new checks go here
   webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked)
   wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token;
                      `channel_url`: every address the wallet reads or answers (sign-in, sign,

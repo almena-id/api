@@ -352,3 +352,38 @@ async def test_only_the_issuers_signer_signs(client: AsyncClient, outbox: Outbox
         headers=bob,
     )
     assert draft.status_code == 403 and draft.json()["detail"] == "not_the_issuers_signer"
+
+
+async def test_what_a_signer_was_asked_counts_only_while_they_still_sign(
+    client: AsyncClient, outbox: Outbox
+) -> None:
+    """A credential or a status list asked of the issuer's signer is not
+    taken from them once another signs for it, nor once they left."""
+    club, headers, tenant, application_id, _, _ = await _accepted(client, outbox)
+    issuer_id = await issuer_id_of(client, headers, tenant)
+    lists = f"/api/v1/tenants/{tenant}/issuers/{issuer_id}/status-lists/sign"
+    signing = f"/api/v1/tenants/{tenant}/issuers/{issuer_id}/signing"
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+
+    asked = await client.post(lists, json={"locale": "en"}, headers=headers)
+    request = await read_sign_request(client, asked.json())
+    await client.put(signing, json={"system": None}, headers=headers)
+    late = await answer_jws(client, request, club.wallet)
+    assert late.status_code == 403 and late.json()["detail"] == "not_the_issuers_signer"
+    mine = {"system": "single_user", "user_id": me["id"]}
+    await client.put(signing, json=mine, headers=headers)
+    await sign_status_list(client, headers, tenant, club.wallet)
+
+    issuing = f"/api/v1/tenants/{tenant}/applications/{application_id}/issuance"
+    await client.put(issuing, json={"claims": CLAIMS, "valid_until": "2030-12-31"}, headers=headers)
+    asked = await client.post(f"{issuing}/sign", json={"locale": "en"}, headers=headers)
+    request = await read_sign_request(client, asked.json())
+    await client.put(signing, json={"system": None}, headers=headers)
+    late = await answer_jws(client, request, club.wallet)
+    assert late.status_code == 403 and late.json()["detail"] == "not_the_issuers_signer"
+    # Refused, the request is still open: once they sign again, it is taken.
+    await client.put(signing, json=mine, headers=headers)
+    signed = await answer_jws(client, request, club.wallet)
+    assert signed.status_code == 204, signed.text
+    inbox = f"/api/v1/tenants/{tenant}/applications/{application_id}"
+    assert (await client.get(inbox, headers=headers)).json()["status"] == "issued"

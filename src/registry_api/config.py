@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     # count visitors rather than the portal. Empty: no caller may name one.
     portal_secret: SecretStr = SecretStr("")
 
+    # Days whoever holds a sent application's secret can still open it, after
+    # its latest step (sent, decided, issued, received): to read the issuer's
+    # decision, made by hand, and take the credential.
+    application_holder_days: int = Field(default=90, gt=0)
+
     # Every so many minutes, what has run out is deleted (registry_api.housekeeping); 0 never.
     housekeeping_minutes: int = Field(default=15, ge=0)
 

@@ -351,3 +351,111 @@ async def test_the_inbox_comes_a_page_at_a_time(
     assert len(seen) == len(set(seen)) == 5 and third["next_cursor"] is None
     bad = await client.get(f"{inbox}?cursor=nope", headers=headers)
     assert bad.status_code == 400 and bad.json()["detail"] == "invalid_cursor"
+
+
+async def test_a_sent_application_stays_reachable_after_its_latest_step(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    from registry_api.config import get_settings
+    from registry_api.security import digest
+
+    headers, tenant = await _club_tenant(client, outbox)
+    issuer = (
+        await client.post(
+            f"/api/v1/tenants/{tenant}/issuers", json={"name": "Club"}, headers=headers
+        )
+    ).json()
+    form = (
+        await client.post(
+            f"/api/v1/tenants/{tenant}/forms",
+            json={"name": {"en": "Join"}, "fields": [{"ref": "given_name"}]},
+            headers=headers,
+        )
+    ).json()
+    now = datetime.now(UTC)
+    days = timedelta(days=get_settings().application_holder_days)
+    started_long_ago = now - days - timedelta(days=30)
+
+    def application(secret: str, status: str, **moments: datetime) -> Application:
+        return Application(
+            tenant_id=uuid.UUID(tenant),
+            issuer_id=uuid.UUID(issuer["id"]),
+            form_id=uuid.UUID(form["id"]),
+            credential_type="membership",
+            status=status,
+            secret_hash=digest(secret),
+            wallet_answered=True,
+            answers={},
+            presented=[],
+            # A day after it started: long gone for one never sent.
+            expires_at=started_long_ago + timedelta(days=1),
+            **moments,
+        )
+
+    rows = {
+        # Never sent, its day over.
+        "unsent": application("unsent", "paired"),
+        # Sent long ago, decided by hand only lately: still to be read.
+        "decided": application(
+            "decided",
+            "accepted",
+            submitted_at=started_long_ago,
+            decided_at=now - timedelta(days=2),
+        ),
+        # Sent and left undecided past the holder's days.
+        "stale": application("stale", "submitted", submitted_at=now - days - timedelta(hours=1)),
+        # Issued lately, not taken yet.
+        "issued": application(
+            "issued",
+            "issued",
+            submitted_at=started_long_ago,
+            decided_at=started_long_ago,
+            issued_at=now - timedelta(hours=1),
+        ),
+    }
+    db.add_all(rows.values())
+    await db.commit()
+
+    async def opened(name: str) -> Any:
+        return await client.get(
+            f"/api/v1/applications/{rows[name].id}", headers={"X-Application-Secret": name}
+        )
+
+    for name in ("unsent", "stale"):
+        gone = await opened(name)
+        assert gone.status_code == 410 and gone.json()["detail"] == "application_expired"
+    decided = (await opened("decided")).json()
+    assert decided["status"] == "accepted"
+    reach = datetime.fromisoformat(decided["expires_at"])
+    assert abs(reach - (now - timedelta(days=2) + days)) < timedelta(seconds=5)
+    issued = (await opened("issued")).json()
+    reach = datetime.fromisoformat(issued["expires_at"])
+    assert abs(reach - (now - timedelta(hours=1) + days)) < timedelta(seconds=5)
+    # A wallet request for it is refused the same way once out of reach.
+    refused = await client.post(
+        f"/api/v1/applications/{rows['stale'].id}/wallet",
+        json={"purpose": "receive"},
+        headers={"X-Application-Secret": "stale"},
+    )
+    assert refused.status_code == 410
+
+
+async def test_a_started_application_says_until_when_it_holds(
+    client: AsyncClient, outbox: Outbox
+) -> None:
+    _, club, _, _ = await _offer(client, outbox)
+    listed = (await client.get("/api/v1/catalog/issuers")).json()["items"]
+    slug = next(item["slug"] for item in listed if item["did"] == club.did)
+    before = datetime.now(UTC)
+    started = (
+        await client.post("/api/v1/applications", json={"issuer": slug, "type": "membership"})
+    ).json()
+    reach = datetime.fromisoformat(started["expires_at"])
+    assert timedelta(hours=23) < reach - before <= timedelta(days=1, seconds=5)
+    shown = (
+        await client.get(
+            f"/api/v1/applications/{started['id']}",
+            headers={"X-Application-Secret": started["secret"]},
+        )
+    ).json()
+    assert datetime.fromisoformat(shown["expires_at"]) == reach

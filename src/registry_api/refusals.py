@@ -38,6 +38,10 @@ REFUSALS: dict[str, str] = {
     "request_not_found": "There is no wallet request by that id.",
     "request_expired": "The wallet request has expired: start again.",
     "already_answered": "The wallet request has been answered already.",
+    "body_too_large": (
+        "The request's body is larger than this endpoint takes (a wallet's answer, "
+        "or anything past the API's limit): `max_bytes` says how large it may be."
+    ),
     "invalid_token": "The wallet's token is not a valid JWS, or not for this request.",
     "invalid_did": "The DID the wallet answers with cannot be read.",
     "invalid_didcomm": (
@@ -186,7 +190,10 @@ REFUSALS: dict[str, str] = {
     # Applying (the holder's side)
     "offer_not_found": "The issuer does not offer that credential type.",
     "application_not_found": "There is no application by that id, or not with this secret.",
-    "application_expired": "The application was not sent within a day: it is gone.",
+    "application_expired": (
+        "The application was not sent within a day, or it was sent and its latest step is "
+        "older than `REGISTRY_APPLICATION_HOLDER_DAYS`: it can no longer be opened."
+    ),
     "application_gone": (
         "The application is gone or no longer accepted, so the signed credential is not issued."
     ),
@@ -201,7 +208,9 @@ REFUSALS: dict[str, str] = {
     "invalid_vp_token": "The presentation (`vp_token`) cannot be read.",
     "file_field_unknown": "The form asks for no file by that key.",
     "file_empty": "The file is empty.",
-    "file_too_large": "The file is larger than the form allows.",
+    "file_too_large": (
+        "The file is larger than the form allows: `max_bytes` says how large it may be."
+    ),
     "file_type_invalid": "The form does not accept that kind of file.",
     "file_not_found": "The application has no file by that key.",
     "already_received": "The credential has been taken already.",

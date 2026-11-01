@@ -1,6 +1,8 @@
 """Sweeping what has run out, so it does not pile up: sign-in codes, provider
 sign-ins and account moves, ended sessions, wallet requests, applications
-started and never sent (their files with them), and old throttle counters.
+started and never sent (their files with them), verifications never answered
+(an answered one is the verifier's record, and its activity), and old
+throttle counters.
 
 `sweep` runs every `REGISTRY_HOUSEKEEPING_MINUTES` in each API process
 (`run`, started by the app's lifespan); deleting what has run out twice is
@@ -23,6 +25,7 @@ from registry_api.models import (
     OAuthFlow,
     Session,
     Throttle,
+    Verification,
     WalletRequest,
 )
 from registry_api.throttle import DAY
@@ -50,6 +53,9 @@ async def sweep(db: AsyncSession) -> dict[str, int]:
         # Never sent: what the holder answered and uploaded goes with them.
         "applications": delete(Application).where(
             Application.status.in_(("open", "paired")), Application.expires_at <= now
+        ),
+        "verifications": delete(Verification).where(
+            Verification.answered_at.is_(None), Verification.expires_at <= now - GRACE
         ),
         "throttles": delete(Throttle).where(Throttle.window_start < now - DAY),
     }

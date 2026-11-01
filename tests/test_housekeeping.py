@@ -1,3 +1,4 @@
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from httpx import AsyncClient
@@ -5,9 +6,17 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import housekeeping
-from registry_api.models import LoginCode, OAuthFlow, Session, Throttle, WalletRequest
+from registry_api.models import (
+    LoginCode,
+    OAuthFlow,
+    Session,
+    Throttle,
+    Verification,
+    WalletRequest,
+)
 from tests.conftest import Outbox
 from tests.test_directory import _sign_in
+from tests.test_verifications import _verifier_and_form
 
 
 async def _count(db: AsyncSession, model: type[object]) -> int:
@@ -63,3 +72,30 @@ async def test_what_ran_out_is_swept(client: AsyncClient, outbox: Outbox, db: As
     assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 401
     # Nothing more to sweep.
     assert not any((await housekeeping.sweep(db)).values())
+
+
+async def test_verifications_never_answered_are_swept(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    """An unanswered one goes once it ran out (and a while more); an answered
+    one is the verifier's record and stays."""
+    headers, tenant, verifier, form_id = await _verifier_and_form(client, outbox)
+    base = f"/api/v1/tenants/{tenant}/verifiers/{verifier['id']}/verifications"
+    ids = [
+        (await client.post(base, json={"form_id": form_id}, headers=headers)).json()["id"]
+        for _ in range(4)
+    ]
+    long_ago = datetime.now(UTC) - timedelta(days=2)
+    rows = [await db.get_one(Verification, uuid.UUID(i)) for i in ids]
+    rows[0].expires_at = long_ago
+    rows[1].expires_at = long_ago
+    rows[1].answered_at = long_ago
+    rows[1].verified = False
+    # Just expired: kept a while, so a poll still hears it expired.
+    rows[2].expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    await db.commit()
+    db.expunge_all()
+
+    assert (await housekeeping.sweep(db))["verifications"] == 1
+    left = set(await db.scalars(select(Verification.id)))
+    assert left == {uuid.UUID(i) for i in ids[1:]}

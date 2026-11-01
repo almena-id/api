@@ -38,7 +38,10 @@ This module is the holder's side (start, answers, files, what is signed);
 the offers are `routes.offers`, the wallet's requests and answers
 `routes.application_wallet`.
 
-Unsubmitted applications expire after a day.
+Unsubmitted applications expire after a day. Once sent, whoever holds the
+secret can open it for `REGISTRY_APPLICATION_HOLDER_DAYS` after its last step
+(sent, decided, issued, received): long enough to hear the issuer's decision,
+made by hand, and take the credential (`reachable_until`).
 """
 
 import base64
@@ -90,7 +93,7 @@ from registry_api.security import digest, new_token
 router = APIRouter(prefix="/applications", tags=["applications"])
 
 TTL = timedelta(days=1)
-MAX_FILE = 10 * 1024 * 1024
+MAX_FILE = checks.MAX_FILE
 
 
 def client_id() -> str:
@@ -115,6 +118,22 @@ class Started(BaseModel):
     slug: str
     # Whoever started it keeps it: it is the only way back in.
     secret: str
+    # Until when it can be opened unsent (`reachable_until`).
+    expires_at: datetime
+
+
+def reachable_until(item: Application) -> datetime:
+    """Until when whoever holds the secret can open the application: unsent,
+    its `expires_at`; sent, some days after its latest step, so a decision
+    taken late can still be read and its credential taken."""
+    steps = [
+        as_utc(moment)
+        for moment in (item.submitted_at, item.decided_at, item.issued_at, item.delivered_at)
+        if moment is not None
+    ]
+    if item.status in ("open", "paired") or not steps:
+        return as_utc(item.expires_at)
+    return max(steps) + timedelta(days=get_settings().application_holder_days)
 
 
 async def _mine(
@@ -125,7 +144,7 @@ async def _mine(
     item = await db.get(Application, application_id)
     if item is None or not secrets.compare_digest(item.secret_hash, digest(secret)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="application_not_found")
-    if item.status in ("open", "paired") and as_utc(item.expires_at) <= datetime.now(UTC):
+    if reachable_until(item) <= datetime.now(UTC):
         raise HTTPException(status.HTTP_410_GONE, detail="application_expired")
     return item
 
@@ -167,7 +186,7 @@ async def start(body: StartIn, request: Request, db: DbSession) -> Started:
     )
     db.add(item)
     await db.commit()
-    return Started(id=item.id, slug=item.slug, secret=secret)
+    return Started(id=item.id, slug=item.slug, secret=secret, expires_at=item.expires_at)
 
 
 async def files_of(db: AsyncSession, item: Application) -> dict[str, dict[str, Any]]:
@@ -213,6 +232,8 @@ async def view(db: AsyncSession, item: Application) -> dict[str, Any]:
         "id": str(item.id),
         "slug": item.slug,
         "status": item.status,
+        # Until when whoever holds the secret can open it (`reachable_until`).
+        "expires_at": reachable_until(item).isoformat(),
         "holder_did": item.holder_did,
         "offer": await offer_view(db, issuer, form, item.credential_type),
         "answers": item.answers,
@@ -290,7 +311,9 @@ async def save_answers(item: Mine, body: AnswersIn, db: DbSession) -> dict[str, 
     summary="Upload a file for one of the form's file fields (replaces the last)",
     responses={
         status.HTTP_409_CONFLICT: {"description": "`application_not_paired`, `application_closed`"},
-        status.HTTP_413_CONTENT_TOO_LARGE: {"description": "`file_too_large` (10 MB)"},
+        status.HTTP_413_CONTENT_TOO_LARGE: {
+            "description": "`file_too_large`: past 10 MiB, the limit sent beside it as max_bytes"
+        },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "description": "`file_field_unknown`, `file_type_invalid`, `file_empty`"
         },
@@ -316,7 +339,7 @@ async def upload_file(
         raise _refuse("file_type_invalid", status.HTTP_422_UNPROCESSABLE_CONTENT)
     data = await file.read(MAX_FILE + 1)
     if len(data) > MAX_FILE:
-        raise _refuse("file_too_large", status.HTTP_413_CONTENT_TOO_LARGE)
+        raise Refusal(status.HTTP_413_CONTENT_TOO_LARGE, "file_too_large", max_bytes=MAX_FILE)
     if not data:
         raise _refuse("file_empty", status.HTTP_422_UNPROCESSABLE_CONTENT)
     await db.execute(

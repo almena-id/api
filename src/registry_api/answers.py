@@ -23,6 +23,9 @@ from registry_api import patterns, trust_anchor
 from registry_api.models import Form
 from registry_api.trust_anchor import PREFIX
 
+# A file a holder uploads for a field, at most (`max_bytes`, as offers show it).
+MAX_FILE = 10 * 1024 * 1024
+
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 

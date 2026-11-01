@@ -35,6 +35,7 @@ from registry_api.api.routes.wallet import (
     LocaleIn,
     RequestOut,
     SignObject,
+    issuer_signer,
     my_keys,
     new_sign_request,
 )
@@ -49,7 +50,7 @@ VALIDITY = timedelta(days=365)
 async def signing_key(db: AsyncSession, issuer: Issuer, user_id: uuid.UUID) -> str | None:
     """The key `user_id` would sign the issuer's credentials with: theirs, and
     one the issuer's DID lists; `None` if they are not its signer or have none."""
-    if issuer.signing != "single_user" or issuer.signer_id != user_id or not issuer.identity.did:
+    if not issuer.identity.did or not await issuer_signer(db, issuer, user_id):
         return None
     listed = {name for name, _ in await presentations.issuer_keys(db, issuer.identity.did)}
     mine = [key for key in await my_keys(db, user_id) if key in listed]

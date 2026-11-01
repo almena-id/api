@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from scalar_fastapi import add_scalar_reference
 
-from registry_api import __version__, errors, housekeeping, refusals
+from registry_api import __version__, bodies, errors, housekeeping, refusals
 from registry_api.api.router import api_router
 from registry_api.api.routes import (
     did_documents,
@@ -54,6 +54,8 @@ def create_app() -> FastAPI:
         ],
     )
     app.add_exception_handler(errors.Refusal, errors.handle)
+    # Inside CORS, so a refused body is still readable by the portal.
+    app.add_middleware(bodies.BodyLimit)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

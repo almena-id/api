@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from ipaddress import IPv6Address, ip_address, ip_network
 
 from fastapi import HTTPException, Request, status
+from sqlalchemy import case
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,36 +68,52 @@ async def check(db: AsyncSession, code: str, *limits: Limit) -> None:
             raise refusal(code, ends - now)
 
 
-async def count(db: AsyncSession, *limits: Limit) -> None:
-    """One more against each of `limits`; the caller commits."""
+async def _counted(
+    db: AsyncSession, limits: tuple[Limit, ...]
+) -> list[tuple[Limit, datetime, int]]:
+    """One more against each of `limits`, in one statement each — a new
+    counter, one past its window started again, or one more — so requests at
+    once each count (the row is locked meanwhile); each with its window's start and count now."""
     now = datetime.now(UTC)
     insert = postgresql_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
+    counted = []
     for limit in limits:
         if limit.most <= 0:
             continue
-        added = await db.execute(
+        # Old counters are swept by `registry_api.housekeeping`.
+        ended = Throttle.window_start <= now - limit.window
+        statement = (
             insert(Throttle)
             .values(key=limit.key, window_start=now, hits=1)
-            .on_conflict_do_nothing(index_elements=["key"])
+            .on_conflict_do_update(
+                index_elements=["key"],
+                set_={
+                    "window_start": case((ended, now), else_=Throttle.window_start),
+                    "hits": case((ended, 1), else_=Throttle.hits + 1),
+                },
+            )
+            .returning(Throttle.window_start, Throttle.hits)
         )
-        if getattr(added, "rowcount", 0):
-            # A new counter (old ones are swept by `registry_api.housekeeping`).
-            continue
-        row = await db.get(Throttle, limit.key, populate_existing=True)
-        if row is None:
-            continue
-        if _utc(row.window_start) + limit.window <= now:
-            row.window_start, row.hits = now, 1
-        else:
-            row.hits += 1
-    await db.flush()
+        row = (await db.execute(statement)).one()
+        counted.append((limit, row[0], row[1]))
+    return counted
+
+
+async def count(db: AsyncSession, *limits: Limit) -> None:
+    """One more against each of `limits`; the caller commits."""
+    await _counted(db, limits)
 
 
 async def hit(db: AsyncSession, code: str, *limits: Limit) -> None:
-    """Refuse with `code` when any of `limits` is spent, else count one more
-    and commit it: the request counts whatever comes of it."""
-    await check(db, code, *limits)
-    await count(db, *limits)
+    """Count one more against each of `limits` and refuse with `code` if any
+    is then past its most (counted and refused at once: two requests can not
+    both take the last one); else commit it: the request counts whatever
+    comes of it. A refused one is not counted."""
+    now = datetime.now(UTC)
+    for limit, started, hits in await _counted(db, limits):
+        if hits > limit.most:
+            await db.rollback()
+            raise refusal(code, _utc(started) + limit.window - now)
     await db.commit()
 
 

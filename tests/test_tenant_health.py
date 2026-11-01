@@ -1,18 +1,22 @@
+import base64
+import json
 import uuid
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api.config import get_settings
-from registry_api.models import TenantMember
+from registry_api.models import StatusList, TenantMember
 from registry_api.root import create_root
 from tests.conftest import Dns, Outbox
 from tests.fake_wallet import FakeWallet
 from tests.mediators import new_mediator, verified_domain
 from tests.signing import Headers, link_wallet, publish, ready, sign
 from tests.test_directory import _sign_in
+from tests.test_issuance import sign_status_list
 
 
 @pytest.fixture(autouse=True)
@@ -52,8 +56,14 @@ async def test_a_new_tenant_lacks_a_mediator_and_a_wallet(
 ) -> None:
     ada, tenant = await _sign_in(client, outbox, "ada@example.org")
     health = await _health(client, ada, tenant)
-    assert _issues(health) == {"name": None, "mediator": "missing", "signing_flow": "no_wallet"}
-    assert health["score"] == 33
+    # Nothing of issuers' or verifiers' is asked while it has none.
+    assert _issues(health) == {
+        "name": None,
+        "mediator": "missing",
+        "signing_flow": "no_wallet",
+        "published": "missing",
+    }
+    assert health["score"] == 25
 
 
 async def test_it_is_whole_once_set_up(client: AsyncClient, outbox: Outbox, dns: Dns) -> None:
@@ -69,9 +79,102 @@ async def test_it_is_whole_once_set_up(client: AsyncClient, outbox: Outbox, dns:
 
     await sign(client, ada, tenant, mediator["identity"]["id"], wallet)
     await publish(client, ada, tenant, "mediators", mediator["id"])
+    assert _issues(await _health(client, ada, tenant))["published"] == "missing"
+
+    # A verifier, signed, with its signer and its queue, published.
+    base = f"/api/v1/tenants/{tenant}/verifiers"
+    door = (await client.post(base, json={"name": "Door"}, headers=ada)).json()
+    health = await _health(client, ada, tenant)
+    assert _issues(health) == {
+        "name": None,
+        "mediator": None,
+        "signing_flow": None,
+        "signers": "no_signer",
+        "status_lists": None,
+        "queues": "missing",
+        "published": "unpublished",
+    }
+    signers = next(c for c in health["checks"] if c["check"] == "signers")
+    assert (signers["item"], signers["item_kind"]) == (door["id"], "verifier")
+    await _set_signer(client, ada, tenant, "verifiers", door["id"])
+    await client.post(f"{base}/{door['id']}/queue", headers=ada)
+    await sign(client, ada, tenant, door["identity"]["id"], wallet)
+    await publish(client, ada, tenant, "verifiers", door["id"])
     health = await _health(client, ada, tenant)
     assert health["score"] == 100
     assert all(c["done"] for c in health["checks"])
+
+
+async def _set_signer(
+    client: AsyncClient, headers: Headers, tenant: str, kind: str, item_id: str
+) -> None:
+    me = (await client.get("/api/v1/auth/me", headers=headers)).json()
+    response = await client.put(
+        f"/api/v1/tenants/{tenant}/{kind}/{item_id}/signing",
+        json={"system": "single_user", "user_id": me["id"]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+
+async def test_an_issuers_signer_needs_a_wallet_and_its_lists_signed(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    ada, tenant = await _sign_in(client, outbox, "ada@example.org")
+    wallet = await ready(client, ada, tenant)
+    base = f"/api/v1/tenants/{tenant}/issuers"
+    club = (await client.post(base, json={"name": "Club"}, headers=ada)).json()
+    await client.put(
+        f"{base}/{club['id']}/credential-types", json={"types": ["membership"]}, headers=ada
+    )
+    # Bob signs for it, but has no wallet.
+    await client.post(
+        f"/api/v1/tenants/{tenant}/invitations",
+        json={"email": "bob@example.org", "role": "member"},
+        headers=ada,
+    )
+    await _sign_in(client, outbox, "bob@example.org")
+    members = (await client.get(f"/api/v1/tenants/{tenant}/members", headers=ada)).json()
+    bob_id = next(m["user_id"] for m in members if m["email"] == "bob@example.org")
+    signing = f"{base}/{club['id']}/signing"
+    await client.put(signing, json={"system": "single_user", "user_id": bob_id}, headers=ada)
+    assert _issues(await _health(client, ada, tenant))["signers"] == "no_wallet"
+    # A draft's lists are asked nothing: its DID does not resolve.
+    assert _issues(await _health(client, ada, tenant))["status_lists"] is None
+
+    await _set_signer(client, ada, tenant, "issuers", club["id"])
+    await sign(client, ada, tenant, club["identity"]["id"], wallet)
+    await publish(client, ada, tenant, "issuers", club["id"])
+    health = await _health(client, ada, tenant)
+    assert _issues(health)["signers"] is None
+    # It grants a type, so it needs a signed list before it issues.
+    lists = next(c for c in health["checks"] if c["check"] == "status_lists")
+    assert (lists["issue"], lists["item"], lists["item_kind"]) == (
+        "unsigned",
+        club["id"],
+        "issuer",
+    )
+    await sign_status_list(client, ada, tenant, wallet)
+    assert _issues(await _health(client, ada, tenant))["status_lists"] is None
+
+    # Signed by a key its DID no longer lists: stale.
+    listed = await db.scalar(
+        select(StatusList).where(StatusList.issuer_id == uuid.UUID(club["id"]))
+    )
+    assert listed is not None and listed.token is not None
+    head, _, rest = listed.token.partition(".")
+    header = json.loads(base64.urlsafe_b64decode(head + "=" * (-len(head) % 4)))
+    header["kid"] = header["kid"].rpartition("#")[0] + "#z6MkGone"
+    forged = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip("=")
+    listed.token = f"{forged}.{rest}"
+    await db.commit()
+    assert _issues(await _health(client, ada, tenant))["status_lists"] == "stale"
+
+    # A signer who left signs nothing.
+    await client.put(signing, json={"system": "single_user", "user_id": bob_id}, headers=ada)
+    await db.delete(await db.get_one(TenantMember, (uuid.UUID(tenant), uuid.UUID(bob_id))))
+    await db.commit()
+    assert _issues(await _health(client, ada, tenant))["signers"] == "no_signer"
 
 
 async def test_a_signer_who_left_signs_nothing(

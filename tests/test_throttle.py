@@ -2,6 +2,7 @@ import time
 from datetime import timedelta
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient, Response
 from pydantic import SecretStr
 from sqlalchemy import select
@@ -202,3 +203,23 @@ def test_a_runaway_pattern_fails_in_time() -> None:
     assert time.monotonic() - started < 1
     assert patterns.matches(r"[A-Z]{3}\d+", "ABC123")
     assert not patterns.valid("(unclosed")
+
+
+async def test_counting_and_refusing_is_one_step(db: AsyncSession) -> None:
+    """Each hit counts in one statement and is refused on what it counted:
+    of requests at once, only as many as the limit go through."""
+    limit = throttle.Limit("test:atomic", 2, timedelta(hours=1))
+    await throttle.hit(db, "too_many_requests", limit)
+    await throttle.hit(db, "too_many_requests", limit)
+    with pytest.raises(HTTPException) as refused:
+        await throttle.hit(db, "too_many_requests", limit)
+    assert refused.value.detail == "too_many_requests"
+    assert refused.value.headers and 3590 < int(refused.value.headers["Retry-After"]) <= 3600
+    # The refused one is not counted.
+    row = await db.get(Throttle, "test:atomic", populate_existing=True)
+    assert row is not None and row.hits == 2
+    # Past its window it starts again, in the same statement.
+    await _age(db, timedelta(hours=1, seconds=1))
+    await throttle.hit(db, "too_many_requests", limit)
+    row = await db.get(Throttle, "test:atomic", populate_existing=True)
+    assert row is not None and row.hits == 1

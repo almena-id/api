@@ -1,14 +1,26 @@
 import json
+import uuid
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
+from registry_api import bodies
+from registry_api.api.routes import verifications
 from registry_api.broker.memory import MemoryBroker
+from registry_api.main import app
+from registry_api.models import Verification
+from registry_api.presentations import get_status_fetch
 from tests.conftest import Outbox
 from tests.fake_wallet import FakeWallet
 from tests.signing import publish, ready, sign
 from tests.test_directory import _sign_in
+from tests.test_issuance import issued
 from tests.test_presentations import _issuer, sd_jwt
 
 
@@ -141,3 +153,152 @@ async def test_only_forms_with_credentials_and_the_tenants_own(
         headers=eve,
     )
     assert theirs.status_code == 404
+
+
+async def _unreachable(url: str) -> str:
+    raise OSError(f"nothing is fetched: {url}")
+
+
+async def test_a_credential_the_registry_issued_is_verified_by_qr(
+    client: AsyncClient, outbox: Outbox, broker: MemoryBroker
+) -> None:
+    """The whole way: issued by a club, held by a wallet, asked for by
+    another tenant's verifier, presented selectively, polled verified."""
+    club, _, _, _, _, holder, credential = await issued(client, outbox)
+    headers, tenant, verifier, form_id = await _verifier_and_form(client, outbox)
+    # The club's status list is the registry's own: read, never fetched.
+    app.dependency_overrides[get_status_fetch] = lambda: _unreachable
+    base = f"/api/v1/tenants/{tenant}/verifiers/{verifier['id']}/verifications"
+    opened = await client.post(base, json={"form_id": form_id}, headers=headers)
+    assert opened.status_code == 201, opened.text
+    verification = opened.json()
+    poll = f"{base}/{verification['id']}"
+    assert (await client.get(poll, headers=headers)).json()["status"] == "pending"
+
+    request = await _request(client, verification["deep_link"])
+    asked = request["credentials"][0]
+    assert asked == {"key": "membership", "type": "membership", "required": True, "purpose": None}
+    # Only what the form asks for is shown; the family name stays with the holder.
+    presented = holder.present(request, credential, ["given_name", "member_number"])
+    answered = await client.post(
+        urlparse(request["response_uri"]).path,
+        data={"vp_token": json.dumps({"membership_sd_jwt": [presented]})},
+    )
+    assert answered.status_code == 204, answered.text
+
+    seen = (await client.get(poll, headers=headers)).json()
+    assert seen["status"] == "answered" and seen["result"]["verified"] is True
+    checked = seen["result"]["credentials"][0]
+    assert checked["issuer"] == club.did and checked["problems"] == []
+    assert checked["claims"] == {"given_name": "Lucía", "member_number": "0042"}
+    # Read by the wallet once answered: no more.
+    again = await client.get(urlparse(request["response_uri"]).path.removesuffix("/response"))
+    assert again.status_code == 409 and again.json()["detail"] == "already_answered"
+
+
+async def test_an_expired_request_is_neither_read_nor_answered(
+    client: AsyncClient, outbox: Outbox, db: AsyncSession
+) -> None:
+    headers, tenant, verifier, form_id = await _verifier_and_form(client, outbox)
+    base = f"/api/v1/tenants/{tenant}/verifiers/{verifier['id']}/verifications"
+    verification = (await client.post(base, json={"form_id": form_id}, headers=headers)).json()
+    request = await _request(client, verification["deep_link"])
+    item = await db.get_one(Verification, uuid.UUID(verification["id"]))
+    item.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    await db.commit()
+    path = urlparse(request["response_uri"]).path
+    read = await client.get(path.removesuffix("/response"))
+    assert read.status_code == 410 and read.json()["detail"] == "request_expired"
+    late = await client.post(path, json={"vp_token": {"membership_sd_jwt": ["x"]}})
+    assert late.status_code == 410 and late.json()["detail"] == "request_expired"
+    seen = (await client.get(f"{base}/{verification['id']}", headers=headers)).json()
+    assert seen["status"] == "expired" and seen["deep_link"] is None
+    unknown = await client.get(
+        path.removesuffix("/response").replace(verification["id"], str(uuid.uuid4()))
+    )
+    assert unknown.status_code == 404 and unknown.json()["detail"] == "request_not_found"
+
+
+async def test_another_tenants_verifier_and_verifications_are_not_seen(
+    client: AsyncClient, outbox: Outbox
+) -> None:
+    headers, tenant, verifier, form_id = await _verifier_and_form(client, outbox)
+    base = f"/api/v1/tenants/{tenant}/verifiers/{verifier['id']}/verifications"
+    verification = (await client.post(base, json={"form_id": form_id}, headers=headers)).json()
+    eve, eves = await _sign_in(client, outbox, "eve@example.org")
+    # Not a member of Ada's tenant: nothing of it.
+    assert (await client.get(f"{base}/{verification['id']}", headers=eve)).status_code == 404
+    # Her own tenant does not reach Ada's verifier, nor its verifications.
+    theirs = f"/api/v1/tenants/{eves}/verifiers/{verifier['id']}/verifications"
+    opened = await client.post(theirs, json={"form_id": form_id}, headers=eve)
+    assert opened.status_code == 404 and opened.json()["detail"] == "verifier_not_found"
+    seen = await client.get(f"{theirs}/{verification['id']}", headers=eve)
+    assert seen.status_code == 404 and seen.json()["detail"] == "verification_not_found"
+    # Nor Ada's verifier another's form.
+    mine = (
+        await client.post(
+            f"/api/v1/tenants/{eves}/forms",
+            json={
+                "name": {"en": "Eve's"},
+                "fields": [{"ref": "given_name"}],
+                "credentials": [{"type": "membership"}],
+            },
+            headers=eve,
+        )
+    ).json()
+    foreign = await client.post(base, json={"form_id": mine["id"]}, headers=headers)
+    assert foreign.status_code == 404 and foreign.json()["detail"] == "form_not_found"
+
+
+async def test_an_answer_too_large_is_refused_unread(client: AsyncClient, outbox: Outbox) -> None:
+    headers, tenant, verifier, form_id = await _verifier_and_form(client, outbox)
+    base = f"/api/v1/tenants/{tenant}/verifiers/{verifier['id']}/verifications"
+    verification = (await client.post(base, json={"form_id": form_id}, headers=headers)).json()
+    request = await _request(client, verification["deep_link"])
+    path = urlparse(request["response_uri"]).path
+    huge = "x" * (bodies.PRESENTATION_MOST + 1)
+    refused = await client.post(path, json={"vp_token": {"membership_sd_jwt": [huge]}})
+    assert refused.status_code == 413 and refused.json()["detail"] == "body_too_large"
+
+    # Sent with no length, it is cut as it comes.
+    async def chunks() -> AsyncIterator[bytes]:
+        for _ in range(3):
+            yield b"x" * (bodies.PRESENTATION_MOST // 2)
+
+    streamed = await client.post(
+        path, content=chunks(), headers={"content-type": "application/x-www-form-urlencoded"}
+    )
+    assert streamed.status_code == 413 and streamed.json()["detail"] == "body_too_large"
+    # Still unanswered.
+    seen = (await client.get(f"{base}/{verification['id']}", headers=headers)).json()
+    assert seen["status"] == "pending"
+
+
+async def test_of_two_answers_at_once_only_one_is_taken(
+    client: AsyncClient, outbox: Outbox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second read the verification before the first was kept: the
+    update that takes it finds it answered."""
+    club = await _issuer(client, outbox, "club@example.org", ["membership"])
+    headers, tenant, verifier, form_id = await _verifier_and_form(client, outbox)
+    base = f"/api/v1/tenants/{tenant}/verifiers/{verifier['id']}/verifications"
+    verification = (await client.post(base, json={"form_id": form_id}, headers=headers)).json()
+    request = await _request(client, verification["deep_link"])
+    path = urlparse(request["response_uri"]).path
+    first = sd_jwt(club, FakeWallet(), nonce=request["nonce"], aud=request["client_id"])
+    assert (
+        await client.post(path, json={"vp_token": {"membership_sd_jwt": [first]}})
+    ).status_code == 204
+
+    async def stale(db: AsyncSession, verification_id: uuid.UUID) -> Verification:
+        item = await db.get_one(Verification, verification_id)
+        # As read before the first answer was committed.
+        set_committed_value(item, "answered_at", None)
+        return item
+
+    monkeypatch.setattr(verifications, "_live", stale)
+    second = sd_jwt(club, FakeWallet(), nonce="other", aud=request["client_id"])
+    raced = await client.post(path, json={"vp_token": {"membership_sd_jwt": [second]}})
+    assert raced.status_code == 409 and raced.json()["detail"] == "already_answered"
+    seen = (await client.get(f"{base}/{verification['id']}", headers=headers)).json()
+    assert seen["result"]["verified"] is True

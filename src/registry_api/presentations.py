@@ -19,8 +19,12 @@ presentation is checked, all of it, before any of its claims is believed:
 - **type**: the `vct`, or the W3C `type`, is the catalogue's;
 - **validity**: `nbf`/`exp` (`validFrom`/`validUntil`), with a little leeway;
 - **status**: a Token Status List (`status.status_list`) or a W3C Bitstring
-  Status List (`credentialStatus`), fetched and checked when the credential has
-  one; a list that cannot be fetched or checked fails it;
+  Status List (`credentialStatus`), checked when the credential has one; a
+  list that cannot be read or checked fails it. The registry's own lists
+  (`{public_url}/status-lists/{slug}`) are read from the database; any other
+  is fetched (`fetch_status`) only over https from a public address, with no
+  redirect elsewhere, within `FETCH_TIMEOUT` and `FETCH_MOST` bytes, and
+  inflated no further than the status asked for;
 - **holder binding**: the key-binding JWT (`kb+jwt`) or the presentation is
   signed by the holder's key — the credential's `cnf` or its subject's
   `did:key` — for this `nonce` and `audience`, over these disclosures;
@@ -32,10 +36,12 @@ Keys are Ed25519 (`EdDSA`), the wallets' and the registry's. The result names
 each problem by a code; nothing is trusted on a partial check.
 """
 
+import asyncio
 import base64
-import gzip
 import hashlib
+import ipaddress
 import json
+import socket
 import time
 import uuid
 import zlib
@@ -43,7 +49,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 import httpx
 import jwt
@@ -54,21 +60,107 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_api import credential_catalog as catalog
 from registry_api import dids, trust_anchor, wallet
 from registry_api.config import get_settings
-from registry_api.models import Identity, Issuer
+from registry_api.models import Identity, Issuer, StatusList
 
 LEEWAY = 300
 
 # Fetches a status list: its URL in, its body out.
 StatusFetch = Callable[[str], Awaitable[str]]
+# Resolves a host and port to the addresses it names.
+Resolve = Callable[[str, int], Awaitable[list[str]]]
+
+FETCH_TIMEOUT = 10
+# A status list token, at most (a list of 2^20 two-bit statuses, all
+# revoked at random, compresses to well under this).
+FETCH_MOST = 1024 * 1024
+FETCH_REDIRECTS = 3
+# The most of a list ever inflated: 2^26 one-bit statuses.
+INFLATE_MOST = 8 * 1024 * 1024
 
 
-async def fetch_status(url: str) -> str:
-    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
-        response = await client.get(
-            url, headers={"Accept": "application/statuslist+jwt, application/vc+jwt, */*"}
-        )
-        response.raise_for_status()
-        return response.text
+class FetchRefused(Exception):
+    """Why a status list was not fetched: `code` says (for the logs and tests)."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+async def _resolve(host: str, port: int) -> list[str]:
+    found = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return sorted({str(info[4][0]) for info in found})
+
+
+def public_address(address: str) -> bool:
+    """Whether an address is on the public internet: not private, loopback,
+    link-local, shared, reserved or multicast (an IPv4-mapped one as its IPv4)."""
+    try:
+        ip = ipaddress.ip_address(address.partition("%")[0])
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_global and not ip.is_multicast
+
+
+async def fetch_status(
+    url: str, *, resolve: Resolve = _resolve, transport: httpx.AsyncBaseTransport | None = None
+) -> str:
+    """Another issuer's status list, from where its credential says: https
+    only, to a public address — the one connected to, so a name that
+    resolves again elsewhere is not followed —, redirects checked the same
+    way, `FETCH_MOST` bytes at most."""
+    for _ in range(FETCH_REDIRECTS + 1):
+        parts = urlsplit(url)
+        host = parts.hostname
+        if parts.scheme != "https" or not host or parts.username or parts.password:
+            raise FetchRefused("not_https")
+        try:
+            port = parts.port or 443
+            addresses = await resolve(host, port)
+        except (OSError, ValueError):
+            raise FetchRefused("unresolvable") from None
+        if not addresses or not all(public_address(a) for a in addresses):
+            raise FetchRefused("not_public")
+        pinned = addresses[0]
+        netloc = f"[{pinned}]:{port}" if ":" in pinned else f"{pinned}:{port}"
+        target = urlunsplit(("https", netloc, parts.path or "/", parts.query, ""))
+        async with (
+            httpx.AsyncClient(
+                timeout=FETCH_TIMEOUT,
+                follow_redirects=False,
+                trust_env=False,
+                transport=transport,
+            ) as client,
+            client.stream(
+                "GET",
+                target,
+                headers={
+                    "Host": parts.netloc.rpartition("@")[2],
+                    "Accept": "application/statuslist+jwt, application/vc+jwt, */*",
+                    "Accept-Encoding": "identity",
+                },
+                extensions={"sni_hostname": host},
+            ) as response,
+        ):
+            if response.is_redirect:
+                url = urljoin(url, response.headers.get("location", ""))
+                continue
+            if response.status_code != 200:
+                raise FetchRefused("not_found")
+            # Nothing inflated here: bytes as sent, so the cap is on what arrives.
+            if response.headers.get("content-encoding", "identity") != "identity":
+                raise FetchRefused("encoded")
+            declared = response.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > FETCH_MOST:
+                raise FetchRefused("too_large")
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body += chunk
+                if len(body) > FETCH_MOST:
+                    raise FetchRefused("too_large")
+            return body.decode(errors="replace")
+    raise FetchRefused("too_many_redirects")
 
 
 def get_status_fetch() -> StatusFetch:
@@ -220,6 +312,31 @@ async def _trusted(db: AsyncSession, entry: dict[str, Any], did: str, tenant_id:
 # Status ----------------------------------------------------------------------
 
 
+async def _status_token(db: AsyncSession, uri: str, fetch: StatusFetch) -> str:
+    """A status list's token: one of the registry's own, as last signed, from
+    the database; any other fetched."""
+    own = f"{get_settings().public_url.rstrip('/')}/status-lists/"
+    if uri.startswith(own):
+        token = await db.scalar(
+            select(StatusList.token).where(StatusList.slug == uri.removeprefix(own))
+        )
+        if token is None:
+            raise Problem("status_unverifiable")
+        return token.strip()
+    return (await fetch(uri)).strip()
+
+
+def _inflate(data: bytes, wbits: int, needed: int) -> bytes:
+    """The first `needed` bytes of a compressed list, inflating no more of it
+    (a small list may hold a great deal of nothing)."""
+    if not 0 < needed <= INFLATE_MOST:
+        raise Problem("status_unverifiable")
+    inflated = zlib.decompressobj(wbits).decompress(data, needed)
+    if len(inflated) < needed:
+        raise Problem("status_unverifiable")
+    return inflated
+
+
 async def _token_status(
     db: AsyncSession, status: dict[str, Any], issuer: str, fetch: StatusFetch
 ) -> None:
@@ -227,16 +344,16 @@ async def _token_status(
     try:
         reference = status["status_list"]
         index = int(reference["idx"])
-        token = (await fetch(str(reference["uri"]))).strip()
+        token = await _status_token(db, str(reference["uri"]), fetch)
         claims = await _signed_by_issuer(db, token, issuer)
         listed = claims["status_list"]
         bits = int(listed["bits"])
-        data = zlib.decompress(_b64decode(listed["lst"]))
+        if bits not in (1, 2, 4, 8) or index < 0:
+            raise Problem("status_unverifiable")
         per_byte = 8 // bits
+        data = _inflate(_b64decode(listed["lst"]), zlib.MAX_WBITS, index // per_byte + 1)
         byte = data[index // per_byte]
         value = (byte >> ((index % per_byte) * bits)) & ((1 << bits) - 1)
-    except Problem:
-        raise Problem("status_unverifiable") from None
     except Exception:
         raise Problem("status_unverifiable") from None
     if value != 0:
@@ -249,11 +366,14 @@ async def _bitstring_status(
     """W3C Bitstring Status List: its list credential, as a JWT by the same issuer."""
     try:
         index = int(status["statusListIndex"])
-        token = (await fetch(str(status["statusListCredential"]))).strip()
+        if index < 0:
+            raise Problem("status_unverifiable")
+        token = await _status_token(db, str(status["statusListCredential"]), fetch)
         claims = await _signed_by_issuer(db, token, issuer)
         listed = claims.get("vc", claims)["credentialSubject"]
         encoded = str(listed["encodedList"]).removeprefix("u")
-        data = gzip.decompress(_b64decode(encoded))
+        # gzip, as the list is published.
+        data = _inflate(_b64decode(encoded), 16 + zlib.MAX_WBITS, index // 8 + 1)
         value = (data[index // 8] >> (7 - index % 8)) & 1
     except Exception:
         raise Problem("status_unverifiable") from None

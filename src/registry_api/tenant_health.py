@@ -26,6 +26,22 @@ before it:
   the tenant's, so that it names the tenant as controller (``unsigned``),
   published (``unpublished``), and chosen as the tenant's (``unchosen``).
 
+Then, every tenant, root or not, once it has issuers or verifiers (none
+asks nothing of a tenant that has none yet), with the first one each is done
+on (`item`, `item_kind`):
+
+- ``signers``: each issuer and verifier has its signer (``no_signer``: none
+  named, or one who left the tenant) and that signer a linked wallet
+  (``no_wallet``);
+- ``status_lists``: each published issuer has its lists signed
+  (``unsigned``: never, or none yet while it grants credential types) by a
+  key its DID still lists (``stale``);
+- ``queues``: each has its queue at the broker (``missing``).
+
+And a tenant other than the root has something published (``published``:
+``missing`` while it has no issuer or verifier, ``unpublished`` while none of
+them is published).
+
 New checks are added here, in the order the portal lists them.
 """
 
@@ -36,11 +52,31 @@ from typing import Literal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry_api import dids, signing_flows
+from registry_api import dids, signing_flows, status_lists
 from registry_api.config import get_settings
-from registry_api.models import Identity, Mediator, Tenant, TenantDomain, TenantMember
+from registry_api.models import (
+    Identity,
+    Issuer,
+    Mediator,
+    Tenant,
+    TenantDomain,
+    TenantMember,
+    UserIdentity,
+    Verifier,
+)
 
-Check = Literal["name", "signing_flow", "domain", "identity", "mediator"]
+Check = Literal[
+    "name",
+    "signing_flow",
+    "domain",
+    "identity",
+    "mediator",
+    "signers",
+    "status_lists",
+    "queues",
+    "published",
+]
+ItemKind = Literal["identity", "mediator", "issuer", "verifier"]
 Issue = Literal[
     "missing",
     "unverified",
@@ -51,6 +87,7 @@ Issue = Literal[
     "unchosen",
     "no_signer",
     "no_wallet",
+    "stale",
 ]
 
 
@@ -62,6 +99,8 @@ class Result:
     # What the task is done on, when it is one thing: the tenant's identity,
     # or the mediator to sign, publish or choose.
     item: uuid.UUID | None = None
+    # What `item` is.
+    item_kind: ItemKind | None = None
 
 
 async def _mediator(db: AsyncSession, tenant: Tenant) -> Issue | None:
@@ -97,13 +136,13 @@ async def _identity(db: AsyncSession, tenant: Tenant) -> Result:
         return Result("identity", "pending")
     state = await dids.status_of(db, get_settings().did_url, identity)
     issue: Issue | None = None if state == "signed" else state
-    return Result("identity", issue, identity.id)
+    return Result("identity", issue, identity.id, "identity")
 
 
 async def _own_mediator(db: AsyncSession, tenant: Tenant) -> Result:
     chosen = await db.get(Mediator, tenant.mediator_id) if tenant.mediator_id else None
     if chosen is not None and chosen.tenant_id != tenant.id:
-        return Result("mediator", await _mediator(db, tenant), chosen.id)
+        return Result("mediator", await _mediator(db, tenant), chosen.id, "mediator")
     # The one chosen; else its own, the furthest along first.
     mediator = chosen or await db.scalar(
         select(Mediator)
@@ -116,11 +155,97 @@ async def _own_mediator(db: AsyncSession, tenant: Tenant) -> Result:
     if mediator.published_at is None:
         identity = await db.get_one(Identity, mediator.identity_id)
         signed = await dids.status_of(db, get_settings().did_url, identity) == "signed"
-        return Result("mediator", "unpublished" if signed else "unsigned", mediator.id)
-    return Result("mediator", None if chosen else "unchosen", mediator.id)
+        return Result("mediator", "unpublished" if signed else "unsigned", mediator.id, "mediator")
+    return Result("mediator", None if chosen else "unchosen", mediator.id, "mediator")
+
+
+Component = Issuer | Verifier
+
+
+async def _components(db: AsyncSession, tenant: Tenant) -> list[Component]:
+    """The tenant's issuers, then its verifiers, oldest first."""
+    found: list[Component] = []
+    for model in (Issuer, Verifier):
+        found += await db.scalars(
+            select(model).where(model.tenant_id == tenant.id).order_by(model.created_at, model.id)
+        )
+    return found
+
+
+def _kind(item: Component) -> ItemKind:
+    return "issuer" if isinstance(item, Issuer) else "verifier"
+
+
+def _first(check: Check, failing: list[tuple[Issue, Component]]) -> Result:
+    if not failing:
+        return Result(check, None)
+    issue, item = failing[0]
+    return Result(check, issue, item.id, _kind(item))
+
+
+async def _signers(db: AsyncSession, items: list[Component]) -> Result:
+    failing: list[tuple[Issue, Component]] = []
+    for item in items:
+        if (
+            item.signing != "single_user"
+            or item.signer_id is None
+            or await db.get(TenantMember, (item.tenant_id, item.signer_id)) is None
+        ):
+            failing.append(("no_signer", item))
+        elif (
+            await db.scalar(
+                select(UserIdentity.id)
+                .where(UserIdentity.user_id == item.signer_id, UserIdentity.provider == "almena")
+                .limit(1)
+            )
+            is None
+        ):
+            failing.append(("no_wallet", item))
+    return _first("signers", failing)
+
+
+async def _status_lists(db: AsyncSession, items: list[Component]) -> Result:
+    failing: list[tuple[Issue, Component]] = []
+    for item in items:
+        if not isinstance(item, Issuer) or item.published_at is None or item.identity.did is None:
+            # A draft's DID does not resolve: no list of it can be checked.
+            continue
+        lists = await status_lists.lists_of(db, item)
+        if not lists:
+            if item.credential_types:
+                failing.append(("unsigned", item))
+            continue
+        for listed in lists:
+            if listed.token is None:
+                failing.append(("unsigned", item))
+                break
+            if await status_lists.needs_signing(db, listed, item):
+                failing.append(("stale", item))
+                break
+    return _first("status_lists", failing)
+
+
+def _queues(items: list[Component]) -> Result:
+    return _first("queues", [("missing", item) for item in items if item.queue_created_at is None])
+
+
+def _published(items: list[Component]) -> Result:
+    if not items:
+        return Result("published", "missing")
+    if any(item.published_at is not None for item in items):
+        return Result("published", None)
+    return Result("published", "unpublished", items[0].id, _kind(items[0]))
+
+
+async def _operating(db: AsyncSession, items: list[Component]) -> list[Result]:
+    """What its issuers and verifiers need to work; nothing while it has none."""
+    if not items:
+        return []
+    return [await _signers(db, items), await _status_lists(db, items), _queues(items)]
 
 
 async def checks(db: AsyncSession, tenant: Tenant) -> list[Result]:
+    items = await _components(db, tenant)
     if tenant.root:
         return [
             Result("name", None if (tenant.name or "").strip() else "missing"),
@@ -128,11 +253,14 @@ async def checks(db: AsyncSession, tenant: Tenant) -> list[Result]:
             Result("domain", await _domain(db, tenant)),
             await _identity(db, tenant),
             await _own_mediator(db, tenant),
+            *await _operating(db, items),
         ]
     return [
         Result("name", None if (tenant.name or "").strip() else "missing"),
         Result("mediator", await _mediator(db, tenant)),
         Result("signing_flow", await _signing_flow(db, tenant)),
+        *await _operating(db, items),
+        _published(items),
     ]
 
 

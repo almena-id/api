@@ -21,10 +21,12 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import answers as checks
 from registry_api import (
+    bodies,
     didcomm,
     form_credentials,
     presentations,
@@ -240,7 +242,7 @@ def _messaging_did(id_token: str) -> str | None:
 
 async def _answer(request: Request) -> dict[str, Any]:
     """The wallet's answer: a form (`direct_post`) or JSON."""
-    raw = (await request.body())[: 2 * 1024 * 1024].decode(errors="replace")
+    raw = (await bodies.read(request, bodies.PRESENTATION_MOST)).decode(errors="replace")
     if request.headers.get("content-type", "").startswith("application/json"):
         try:
             body = json.loads(raw)
@@ -269,6 +271,7 @@ async def _answer(request: Request) -> dict[str, Any]:
             "`already_received`"
         },
         status.HTTP_410_GONE: {"description": "`request_expired`"},
+        status.HTTP_413_CONTENT_TOO_LARGE: {"description": "`body_too_large`"},
     },
 )
 async def answer_request(
@@ -280,6 +283,21 @@ async def answer_request(
 ) -> Response:
     item = await _asked(db, application_id)
     body = await _answer(request)
+    # One update that only finds this request unanswered: of two answers at
+    # once, only one goes on (the other waits on the row, then finds it
+    # answered); rolled back with the answer, if it is refused.
+    claimed = await db.execute(
+        update(Application)
+        .where(
+            Application.id == item.id,
+            Application.wallet_nonce == item.wallet_nonce,
+            Application.wallet_answered.is_(False),
+        )
+        .values(wallet_answered=True)
+        .execution_options(synchronize_session=False)
+    )
+    if getattr(claimed, "rowcount", 0) != 1:
+        raise _refuse("already_answered")
     bad = status.HTTP_400_BAD_REQUEST
     if item.wallet_purpose == "receive":
         return await _deliver(db, item, body.get("id_token"))

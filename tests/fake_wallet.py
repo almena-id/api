@@ -5,7 +5,9 @@ answers a request shown by the portal, with a key kept in ``.fake-wallet-key``
 (the same DID every time, so it signs in to the same account).
 """
 
+import base64
 import hashlib
+import json
 import sys
 import time
 from pathlib import Path
@@ -68,6 +70,30 @@ class FakeWallet:
         digest += hashlib.sha256(webvh.jcs(document)).digest()
         return {**options, "proofValue": "z" + b58encode(self.key.sign(digest))}
 
+    def present(
+        self, request: dict[str, Any], credential: str, claims: list[str] | None = None
+    ) -> str:
+        """An SD-JWT VC it holds, presented for `request`: only the
+        disclosures of `claims` (all of them when `None`), and a key-binding
+        JWT for the request's `client_id` and `nonce` over what it shows."""
+        issued, *disclosures = [part for part in credential.split("~") if part]
+        if claims is not None:
+            disclosures = [d for d in disclosures if _disclosed_name(d) in claims]
+        shown = issued + "~" + "".join(d + "~" for d in disclosures)
+        digest = base64.urlsafe_b64encode(hashlib.sha256(shown.encode()).digest())
+        binding = jwt.encode(
+            {
+                "iat": int(time.time()),
+                "aud": request["client_id"],
+                "nonce": request["nonce"],
+                "sd_hash": digest.decode().rstrip("="),
+            },
+            self.key,
+            algorithm="EdDSA",
+            headers={"typ": "kb+jwt"},
+        )
+        return shown + binding
+
     def answer(self, request: dict[str, Any]) -> dict[str, Any]:
         """What the wallet posts back: an `id_token`, or a `proof` to sign."""
         if request["purpose"] == "sign":
@@ -75,6 +101,11 @@ class FakeWallet:
             proof = self.proof(sign["document"], sign["verification_method"], sign["proof_purpose"])
             return {"proof": proof}
         return {"id_token": self.id_token(request)}
+
+
+def _disclosed_name(disclosure: str) -> str:
+    decoded = json.loads(base64.urlsafe_b64decode(disclosure + "=" * (-len(disclosure) % 4)))
+    return str(decoded[1]) if len(decoded) == 3 else ""
 
 
 def request_uri(deep_link: str) -> str:

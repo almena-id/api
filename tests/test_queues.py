@@ -1,3 +1,4 @@
+import uuid
 from typing import Any
 
 from httpx import AsyncClient
@@ -148,3 +149,42 @@ async def test_a_broker_that_does_not_take_it_holds_nothing_up(
     _, headers, tenant, application_id, _, _ = await _accepted(client, outbox, make_queue)
     inbox = f"/api/v1/tenants/{tenant}/applications/{application_id}"
     assert (await client.get(inbox, headers=headers)).json()["status"] == "accepted"
+
+
+async def test_rotating_a_queues_password(
+    client: AsyncClient, outbox: Outbox, broker: MemoryBroker
+) -> None:
+    """`POST …/queue/access`: admins only, a new password each time, what is
+    in the queue kept; with the broker down the old password still holds."""
+    headers, tenant = await _sign_in(client, outbox, "ada@acme.com")
+    base = f"/api/v1/tenants/{tenant}"
+    item = (await client.post(f"{base}/verifiers", json={"name": "Door"}, headers=headers)).json()
+    url = f"{base}/verifiers/{item['id']}/queue"
+    made = (await client.post(url, headers=headers)).json()
+    await broker.publish(made["queue"], "presentation.verified", {"verified": True})
+
+    await client.post(
+        f"{base}/invitations", json={"email": "bob@acme.com", "role": "member"}, headers=headers
+    )
+    bob, _ = await _sign_in(client, outbox, "bob@acme.com")
+    refused = await client.post(f"{url}/access", headers=bob)
+    assert refused.status_code == 403 and refused.json()["detail"] == "not_admin"
+    eve, _ = await _sign_in(client, outbox, "eve@example.org")
+    assert (await client.post(f"{url}/access", headers=eve)).status_code == 404
+    elsewhere = f"{base}/verifiers/{uuid.uuid4()}/queue/access"
+    missing = await client.post(elsewhere, headers=headers)
+    assert missing.status_code == 404 and missing.json()["detail"] == "verifier_not_found"
+
+    first = (await client.post(f"{url}/access", headers=headers)).json()
+    second = (await client.post(f"{url}/access", headers=headers)).json()
+    assert len({made["password"], first["password"], second["password"]}) == 3
+    assert second["queue"] == made["queue"]
+    # (SQLite hands the time back without its zone.)
+    assert second["created_at"].rstrip("Z") == made["created_at"].rstrip("Z")
+    assert broker.users[made["user"]] == (second["password"], made["queue"])
+    assert broker.queues[made["queue"]] == [("presentation.verified", {"verified": True})]
+
+    broker.down = True
+    down = await client.post(f"{url}/access", headers=headers)
+    assert down.status_code == 503 and down.json()["detail"] == "broker_unavailable"
+    assert broker.users[made["user"]][0] == second["password"]

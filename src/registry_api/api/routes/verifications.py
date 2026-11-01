@@ -22,8 +22,9 @@ from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
+from sqlalchemy import update
 
-from registry_api import form_credentials, presentations, queues, trust_anchor, wallet
+from registry_api import bodies, form_credentials, presentations, queues, trust_anchor, wallet
 from registry_api.api.routes.auth import CurrentSession, DbSession, as_utc
 from registry_api.api.routes.directory import TenantId
 from registry_api.api.routes.forms import VerifyOut, verdict
@@ -210,7 +211,7 @@ async def read_request(verification_id: uuid.UUID, db: DbSession) -> dict[str, A
 
 async def _vp_token(request: Request) -> dict[str, list[str]]:
     """The wallet's `vp_token`: a form field (JSON in it) or a JSON body."""
-    raw = (await request.body())[: 2 * 1024 * 1024].decode(errors="replace")
+    raw = (await bodies.read(request, bodies.PRESENTATION_MOST)).decode(errors="replace")
     if request.headers.get("content-type", "").startswith("application/json"):
         try:
             token: Any = json.loads(raw).get("vp_token")
@@ -240,6 +241,7 @@ async def _vp_token(request: Request) -> dict[str, list[str]]:
         404: {"description": "`request_not_found`"},
         409: {"description": "`already_answered`"},
         410: {"description": "`request_expired`"},
+        413: {"description": "`body_too_large`"},
     },
 )
 async def answer_request(
@@ -251,6 +253,17 @@ async def answer_request(
 ) -> Response:
     item = await _live(db, verification_id)
     token = await _vp_token(request)
+    # One update that only finds it unanswered: of two answers at once, only
+    # one goes on (the other waits on the row, then finds it answered).
+    answered_at = datetime.now(UTC)
+    claimed = await db.execute(
+        update(Verification)
+        .where(Verification.id == item.id, Verification.answered_at.is_(None))
+        .values(answered_at=answered_at)
+        .execution_options(synchronize_session=False)
+    )
+    if getattr(claimed, "rowcount", 0) != 1:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="already_answered")
     form = await db.get_one(Form, item.form_id)
     checked = await presentations.verify(
         db,
@@ -262,7 +275,7 @@ async def answer_request(
         fetch=fetch,
     )
     result = verdict(form, checked)
-    item.answered_at = datetime.now(UTC)
+    item.answered_at = answered_at
     item.verified = result.verified
     item.result = result.model_dump(mode="json")
     await db.commit()

@@ -33,10 +33,25 @@ from registry_api.models import (
     Form,
     Identity,
     Issuer,
+    TenantDomain,
 )
 from registry_api.texts import text_of
 
 router = APIRouter(prefix="/catalog", tags=["applications"])
+
+# The issuer's domains ----------------------------------------------------------
+
+
+async def verified_domains(db: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
+    """The domains the issuer's tenant has proved by DNS (those its DID document
+    names), oldest first: what the catalog shows as a sign of who it is."""
+    found = await db.scalars(
+        select(TenantDomain.domain)
+        .where(TenantDomain.tenant_id == tenant_id, TenantDomain.verified_at.is_not(None))
+        .order_by(TenantDomain.created_at, TenantDomain.id)
+    )
+    return list(found)
+
 
 # The offer -------------------------------------------------------------------
 
@@ -60,7 +75,8 @@ async def offering(db: AsyncSession, slug: str, type_id: str) -> tuple[Issuer, F
 
 async def offer_view(db: AsyncSession, issuer: Issuer, form: Form, type_id: str) -> dict[str, Any]:
     """What a holder sees of an offer: the issuer, the credential type (and its
-    category) and the form — its fields with their definitions, the credentials it asks for,
+    category) and the form — its fields with their definitions (a file field
+    with the most that may be uploaded, `max_bytes`), the credentials it asks for,
     each with its type's name (the tenant's own types are not Almena's)."""
     filled = form_credentials.fills(form.credentials, form.fields)
     known = await trust_anchor.load(db, issuer.tenant_id)
@@ -75,6 +91,8 @@ async def offer_view(db: AsyncSession, issuer: Issuer, form: Form, type_id: str)
             "name": issuer.name,
             "description": issuer.description,
             "did": issuer.identity.did,
+            # The domains its tenant has proved.
+            "domains": await verified_domains(db, issuer.tenant_id),
         },
         "credential_type": credentials.type_out(known.types[type_id]),
         # The type's category, named and with what it is drawn with.
@@ -84,7 +102,13 @@ async def offer_view(db: AsyncSession, issuer: Issuer, form: Form, type_id: str)
             "name": form.name,
             "description": form.description,
             "fields": [
-                {**stored, "key": key, "field": catalog.field_out(item)}
+                {
+                    **stored,
+                    "key": key,
+                    "field": catalog.field_out(item),
+                    # A file field: the most a holder may upload for it.
+                    **({"max_bytes": checks.MAX_FILE} if item.type == "file" else {}),
+                }
                 for key, stored, item in await checks.fields_of(db, form)
             ],
             "credentials": [asked(entry) for entry in form.credentials],
@@ -108,6 +132,8 @@ class OfferIssuer(BaseModel):
     # By language.
     description: dict[str, str] | None
     did: str
+    # The domains its tenant has proved by DNS, oldest first.
+    domains: list[str]
 
 
 class OfferCategory(BaseModel):
@@ -168,11 +194,17 @@ class _Catalogues:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
         self.seen: dict[uuid.UUID, trust_anchor.Catalogue] = {}
+        self.proved: dict[uuid.UUID, list[str]] = {}
 
     async def of(self, tenant_id: uuid.UUID) -> trust_anchor.Catalogue:
         if tenant_id not in self.seen:
             self.seen[tenant_id] = await trust_anchor.load(self.db, tenant_id)
         return self.seen[tenant_id]
+
+    async def domains(self, tenant_id: uuid.UUID) -> list[str]:
+        if tenant_id not in self.proved:
+            self.proved[tenant_id] = await verified_domains(self.db, tenant_id)
+        return self.proved[tenant_id]
 
 
 def _offer_cursor(issuer: Issuer, type_id: str) -> str:
@@ -188,12 +220,13 @@ def _offer_position(cursor: str) -> tuple[datetime, uuid.UUID, str]:
         raise paging.invalid() from None
 
 
-def _issuer_out(issuer: Issuer) -> OfferIssuer:
+def _issuer_out(issuer: Issuer, domains: list[str]) -> OfferIssuer:
     return OfferIssuer(
         slug=issuer.slug,
         name=issuer.name,
         description=issuer.description,
         did=issuer.identity.did or "",
+        domains=domains,
     )
 
 
@@ -211,8 +244,12 @@ def _type_out(known: trust_anchor.Catalogue, type_id: str) -> OfferType:
     )
 
 
-def _offer_entry(known: trust_anchor.Catalogue, issuer: Issuer, type_id: str) -> OfferEntry:
-    return OfferEntry(issuer=_issuer_out(issuer), credential_type=_type_out(known, type_id))
+def _offer_entry(
+    known: trust_anchor.Catalogue, issuer: Issuer, domains: list[str], type_id: str
+) -> OfferEntry:
+    return OfferEntry(
+        issuer=_issuer_out(issuer, domains), credential_type=_type_out(known, type_id)
+    )
 
 
 def _matches(entry: OfferEntry, words: list[str]) -> bool:
@@ -248,8 +285,9 @@ async def _every_offer(db: AsyncSession) -> list[tuple[Issuer, int, OfferEntry]]
     found: list[tuple[Issuer, int, OfferEntry]] = []
     for issuer in await db.scalars(_listed()):
         known = await catalogues.of(issuer.tenant_id)
+        domains = await catalogues.domains(issuer.tenant_id)
         found.extend(
-            (issuer, place, _offer_entry(known, issuer, type_id))
+            (issuer, place, _offer_entry(known, issuer, domains, type_id))
             for place, type_id in enumerate(_offers_of(known, issuer))
         )
     return found
@@ -340,7 +378,7 @@ async def get_issuer_offers(issuer_slug: str, db: DbSession) -> IssuerOffers:
     assert issuer.published_at is not None
     known = await trust_anchor.load(db, issuer.tenant_id)
     return IssuerOffers(
-        issuer=_issuer_out(issuer),
+        issuer=_issuer_out(issuer, await verified_domains(db, issuer.tenant_id)),
         published_at=issuer.published_at,
         offers=[_type_out(known, type_id) for type_id in _offers_of(known, issuer)],
     )

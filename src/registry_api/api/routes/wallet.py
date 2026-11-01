@@ -37,10 +37,11 @@ from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry_api import (
+    bodies,
     dids,
     issuance,
     queues,
@@ -68,8 +69,10 @@ from registry_api.mail import Locale
 from registry_api.models import (
     Application,
     Identity,
+    Issuer,
     StatusList,
     Tenant,
+    TenantMember,
     User,
     UserIdentity,
     WalletRequest,
@@ -299,9 +302,13 @@ async def read_request(request_id: uuid.UUID, db: DbSession) -> RequestObject:
             "description": "`invalid_token`, `invalid_did`, `invalid_proof`, "
             "`not_an_update_key`, `not_your_key`"
         },
+        status.HTTP_403_FORBIDDEN: {
+            "description": "`not_the_issuers_signer`: no longer the issuer's signer"
+        },
         status.HTTP_404_NOT_FOUND: {"description": "`request_not_found`"},
         status.HTTP_409_CONFLICT: {"description": "`already_answered`"},
         status.HTTP_410_GONE: {"description": "`request_expired`"},
+        status.HTTP_413_CONTENT_TOO_LARGE: {"description": "`body_too_large`"},
     },
 )
 async def answer_request(
@@ -314,7 +321,8 @@ async def answer_request(
     if found.did is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="already_answered")
     # `direct_post` is a form; JSON is taken too.
-    raw = (await request.body())[:65536].decode(errors="replace")
+    raw = (await bodies.read(request, bodies.ANSWER_MOST)).decode(errors="replace")
+    await _claim(db, found)
     token: object = None
     if request.headers.get("content-type", "").startswith("application/json"):
         try:
@@ -338,6 +346,26 @@ async def answer_request(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=error.code) from None
     found.did = did
     await db.commit()
+
+
+# What a request answered is marked with while its answer is checked: never
+# committed (the answer's DID replaces it), so nobody else reads it.
+ANSWERING = "answering"
+
+
+async def _claim(db: AsyncSession, found: WalletRequest) -> None:
+    """Takes the request for this answer, or `already_answered`: one update
+    that only finds it unanswered, so of two answers at once only one goes on
+    (the other waits on the row, then finds it answered). Rolled back with
+    the answer, if it is refused."""
+    claimed = await db.execute(
+        update(WalletRequest)
+        .where(WalletRequest.id == found.id, WalletRequest.did.is_(None))
+        .values(did=ANSWERING)
+        .execution_options(synchronize_session=False)
+    )
+    if getattr(claimed, "rowcount", 0) != 1:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="already_answered")
 
 
 async def _sign(
@@ -378,6 +406,24 @@ async def _sign(
     await db.commit()
 
 
+async def issuer_signer(db: AsyncSession, issuer: Issuer, user_id: uuid.UUID | None) -> bool:
+    """Whether `user_id` signs as the issuer: the signer its system names,
+    and still a member of its tenant (a signer who left signs nothing)."""
+    return (
+        user_id is not None
+        and issuer.signing == "single_user"
+        and issuer.signer_id == user_id
+        and await db.get(TenantMember, (issuer.tenant_id, user_id)) is not None
+    )
+
+
+async def _still_signer(db: AsyncSession, issuer_id: uuid.UUID, user_id: uuid.UUID | None) -> None:
+    """What was asked of the issuer's signer counts only if they still are
+    when they answer: not if they left, or another was named since."""
+    if not await issuer_signer(db, await db.get_one(Issuer, issuer_id), user_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="not_the_issuers_signer")
+
+
 async def _issue(
     db: AsyncSession,
     found: WalletRequest,
@@ -395,6 +441,7 @@ async def _issue(
     item = await db.get(Application, uuid.UUID(payload["application_id"]))
     if item is None or item.status != "accepted":
         raise HTTPException(status.HTTP_409_CONFLICT, detail="application_gone")
+    await _still_signer(db, item.issuer_id, found.user_id)
     item.credential = credential
     item.status = "issued"
     item.issued_at = datetime.now(UTC)
@@ -423,6 +470,7 @@ async def _set_statuses(
     item = await db.get(StatusList, uuid.UUID(payload["status_list_id"]))
     if item is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="status_list_gone")
+    await _still_signer(db, item.issuer_id, found.user_id)
     if item.revision != payload["revision"]:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="status_list_changed")
     now = datetime.now(UTC)

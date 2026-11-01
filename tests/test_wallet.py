@@ -1,9 +1,16 @@
+import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
+from registry_api import bodies
+from registry_api.api.routes import wallet as wallet_routes
 from registry_api.config import Settings, get_settings
+from registry_api.models import WalletRequest
 from registry_api.wallet import did_key, public_key
 from tests.conftest import Outbox
 from tests.fake_wallet import FakeWallet, request_uri
@@ -205,3 +212,60 @@ async def test_the_cli_asks_as_itself(client: AsyncClient) -> None:
 async def test_an_unknown_client_is_refused(client: AsyncClient) -> None:
     response = await client.post("/api/v1/auth/wallet/requests", json={"client": "robot"})
     assert response.status_code == 422
+
+
+async def test_an_answer_too_large_is_refused_and_the_request_left_open(
+    client: AsyncClient,
+) -> None:
+    asked = await _ask(client)
+    request = (await client.get(asked["request_uri"])).json()
+    padded = {"id_token": "x" * (bodies.ANSWER_MOST + 1)}
+    refused = await client.post(request["response_uri"], data=padded)
+    assert refused.status_code == 413 and refused.json()["detail"] == "body_too_large"
+    # Refused before it was taken: a good answer still is.
+    wrong = await client.post(request["response_uri"], data={"id_token": "not a token"})
+    assert wrong.status_code == 400 and wrong.json()["detail"] == "invalid_token"
+    assert await _answer(client, asked, FakeWallet()) == 204
+
+
+async def test_any_body_past_the_apis_most_is_refused(client: AsyncClient) -> None:
+    huge = b"x" * (bodies.MOST + 1)
+    refused = await client.post(
+        "/api/v1/auth/code", content=huge, headers={"content-type": "application/json"}
+    )
+    assert refused.status_code == 413 and refused.json()["detail"] == "body_too_large"
+
+    async def chunks() -> AsyncIterator[bytes]:
+        for _ in range(12):
+            yield b" " * (1024 * 1024)
+
+    streamed = await client.post(
+        "/api/v1/auth/code", content=chunks(), headers={"content-type": "application/json"}
+    )
+    assert streamed.status_code == 413 and streamed.json()["detail"] == "body_too_large"
+
+
+async def test_of_two_answers_at_once_only_one_is_taken(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, db: AsyncSession
+) -> None:
+    """The second read the request before the first was kept: the update
+    that takes it finds it answered, and the first answer stands."""
+    asked = await _ask(client)
+    first = FakeWallet()
+    assert await _answer(client, asked, first) == 204
+
+    live = wallet_routes._live
+
+    async def stale(db: AsyncSession, request_id: uuid.UUID) -> WalletRequest:
+        found = await live(db, request_id)
+        set_committed_value(found, "did", None)
+        return found
+
+    monkeypatch.setattr(wallet_routes, "_live", stale)
+    raced = await _answer(client, asked, FakeWallet())
+    assert raced == 409
+    monkeypatch.undo()
+    db.expire_all()
+    kept = await db.get_one(WalletRequest, uuid.UUID(asked["id"]))
+    assert kept.did == first.did
+    assert (await _result(client, asked))["status"] == "signed_in"
