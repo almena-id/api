@@ -13,7 +13,7 @@ from registry_api.models import StatusList, TenantMember
 from registry_api.root import create_root
 from tests.conftest import Dns, Outbox
 from tests.fake_wallet import FakeWallet
-from tests.mediators import new_mediator, verified_domain
+from tests.mediators import new_mediator
 from tests.signing import Headers, link_wallet, publish, ready, sign
 from tests.test_directory import _sign_in
 from tests.test_issuance import sign_status_list
@@ -285,30 +285,13 @@ async def test_the_roots_health_is_its_onboarding_in_order(
     assert await steps() == [
         ("name", None),
         ("signing_flow", "no_wallet"),
-        ("domain", "missing"),
         ("identity", "pending"),
-        ("mediator", "missing"),
     ]
     wallet = FakeWallet()
     await link_wallet(client, headers, wallet)
-    await verified_domain(client, headers, root, dns)
     own = (await client.get(f"/api/v1/tenants/{root}", headers=headers)).json()
     await sign(client, headers, root, own["identity"]["id"], wallet)
     health = await _health(client, headers, root)
-    assert [c["issue"] for c in health["checks"]][:4] == [None] * 4
-    assert health["checks"][3]["item"] == own["identity"]["id"]
-
-    mediator = await new_mediator(client, headers, root, dns, subdomain="relay", public=True)
-    checks = (await _health(client, headers, root))["checks"]
-    assert (checks[4]["issue"], checks[4]["item"]) == ("unsigned", mediator["id"])
-    await sign(client, headers, root, mediator["identity"]["id"], wallet)
-    assert (await steps())[4] == ("mediator", "unpublished")
-    await publish(client, headers, root, "mediators", mediator["id"])
-    assert (await steps())[4] == ("mediator", "unchosen")
-
-    picked = {"mediator_id": mediator["id"]}
-    await client.patch(f"/api/v1/tenants/{root}", json=picked, headers=headers)
-    # Its document now names the mediator's service: signed again.
-    assert (await steps())[3:] == [("identity", "outdated"), ("mediator", None)]
-    await sign(client, headers, root, own["identity"]["id"], wallet)
-    assert (await _health(client, headers, root))["score"] == 100
+    assert health["checks"][2]["item"] == own["identity"]["id"]
+    # Neither a domain nor a mediator of its own is asked of it.
+    assert health["score"] == 100

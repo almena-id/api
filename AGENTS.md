@@ -90,8 +90,8 @@ src/registry_api/
   tenant_health.py   a tenant's health: the checks it must pass to operate (name, mediator,
                      signing flow; with issuers or verifiers, their signers, status lists
                      and queues; something published) and its score; the root's start
-                     with its onboarding in order (name, signing flow, domain, identity,
-                     its own mediator: created, signed, published, chosen), each with the
+                     with its onboarding in order (name, signing flow, identity;
+                     a domain or a mediator of its own is optional), each with the
                      item it is done on (`item`, `item_kind`); new checks go here
   webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked)
   wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token;
