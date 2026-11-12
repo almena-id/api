@@ -44,9 +44,6 @@ REFUSALS: dict[str, str] = {
     ),
     "invalid_token": "The wallet's token is not a valid JWS, or not for this request.",
     "invalid_did": "The DID the wallet answers with cannot be read.",
-    "invalid_didcomm": (
-        "The `didcomm` DID the wallet pairs with is not a `did:peer:2` it can be written to."
-    ),
     "invalid_signature": "The signature does not hold over what was sent.",
     "invalid_proof": "The proof over the identity's log entry does not hold.",
     "not_canonical": "The log entry is not written as its canonical JSON.",

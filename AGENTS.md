@@ -96,13 +96,11 @@ src/registry_api/
   webvh.py           did:webvh 1.0 logs: JCS, SCID, entry hashes, eddsa-jcs-2022 proofs (checked)
   wallet.py          checking a wallet's answer: did:key (Ed25519) and its signed id_token;
                      `channel_url`: every address the wallet reads or answers (sign-in, sign,
-                     applications, collect, verifications) is on the identity domain
+                     applications, verifications) is on the identity domain
                      (`did_url`), since the wallet's key follows the origin it reads from;
                      `links`: a request shown as `deep_link`, the https link on the identity
                      domain (`{did_url}/w/<what follows almena://>`, which only the wallet
                      can claim), and `scheme_link`, the same as `almena://`
-  didcomm.py         reading the did:peer:2 a holder's wallet names at pairing (kept on the
-                     application; nothing is sent to it)
   broker/            the message broker issuers' and verifiers' back offices read from:
                      base.py (`Broker`: declare a queue, grant its read-only user,
                      remove both, publish), rabbitmq.py (the management HTTP API),
@@ -185,7 +183,7 @@ src/registry_api/
                      applications.py: holders applying for an offer (no account: a
                      secret): start, answers, files and what they sign;
                      application_wallet.py: the wallet's pair/present/submit/receive
-                     requests on the sign-in channel, and collecting an issued credential;
+                     requests on the sign-in channel;
                      offers.py: the public offers (`/catalog/offers`, searched by `q` and
                      filtered by `category`; their categories with counts; an issuer's
                      together; one by one);

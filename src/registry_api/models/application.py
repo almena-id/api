@@ -49,9 +49,6 @@ class Application(TimestampMixin, Base):
     secret_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True)
     # The holder's DID for this issuer: the `did:key` its wallet paired with.
     holder_did: Mapped[str | None] = mapped_column(String(255))
-    # Where the holder receives messages from this issuer: the `did:peer:2`
-    # its wallet named when pairing (`registry_api.didcomm`); `null` if none.
-    holder_messaging_did: Mapped[str | None] = mapped_column(String(2048))
     # The wallet request in course — `pair`, `present` or `submit` — its nonce,
     # until when it holds and whether the wallet answered it.
     wallet_purpose: Mapped[str | None] = mapped_column(String(16))

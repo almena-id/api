@@ -1,7 +1,6 @@
 """The wallet's side of an application: the requests the catalog shows as QR
-codes (pair, present, submit, receive), the wallet reading and answering them
-by ``direct_post``, and collecting an issued credential. See
-`routes.applications` for the whole flow."""
+codes (pair, present, submit, receive), and the wallet reading and answering
+them by ``direct_post``. See `routes.applications` for the whole flow."""
 
 import json
 import secrets
@@ -10,7 +9,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from urllib.parse import parse_qs
 
-import jwt
 from fastapi import (
     APIRouter,
     Depends,
@@ -20,7 +18,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +26,6 @@ from registry_api import answers as checks
 from registry_api import (
     bodies,
     credential_catalog,
-    didcomm,
     form_credentials,
     presentations,
     queues,
@@ -43,7 +40,6 @@ from registry_api.api.routes.applications import (
     content_digest,
     files_of,
     filled_by_credentials,
-    links,
     paired,
     parts,
     view,
@@ -61,11 +57,6 @@ WALLET_TTL = timedelta(minutes=5)
 Purpose = Literal["pair", "present", "submit", "receive"]
 StatusFetch = Annotated[presentations.StatusFetch, Depends(presentations.get_status_fetch)]
 BrokerDep = Annotated[Broker, Depends(get_broker)]
-
-
-def collect_url(item: Application) -> str:
-    """Where the holder's wallet asks to receive the issued credential."""
-    return wallet.channel_url(f"/applications/{item.id}/collect")
 
 
 def _refuse(code: str, status_code: int = status.HTTP_409_CONFLICT) -> HTTPException:
@@ -130,49 +121,6 @@ async def ask_wallet(item: Mine, body: WalletIn, db: DbSession) -> dict[str, Any
     return (await view(db, item))["wallet"]  # type: ignore[no-any-return]
 
 
-class CollectIn(BaseModel):
-    # Signed by the holder's key for this issuer (the one it paired with):
-    # audience this very endpoint, nonce the application's id.
-    id_token: str = Field(max_length=8192)
-
-
-@router.post(
-    "/{application_id}/collect",
-    summary="The holder's wallet asks to receive its issued credential",
-    responses={
-        status.HTTP_400_BAD_REQUEST: {"description": "`invalid_token`, `invalid_did`"},
-        status.HTTP_404_NOT_FOUND: {"description": "`application_not_found`"},
-        status.HTTP_409_CONFLICT: {"description": "`not_issued`, `already_received`"},
-    },
-)
-async def collect(application_id: uuid.UUID, body: CollectIn, db: DbSession) -> dict[str, Any]:
-    """The wallet proves it is the holder and gets a `receive` request,
-    answered as the catalog's QR 3 is."""
-    item = await db.get(Application, application_id)
-    if item is None or item.holder_did is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="application_not_found")
-    try:
-        did = wallet.verify(body.id_token, audience=collect_url(item), nonce=str(item.id))
-    except wallet.WalletError as error:
-        raise _refuse(error.code, status.HTTP_400_BAD_REQUEST) from None
-    if did != item.holder_did:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="application_not_found")
-    if item.status != "issued":
-        raise _refuse("not_issued")
-    if item.delivered_at is not None:
-        raise _refuse("already_received")
-    item.wallet_purpose = "receive"
-    item.wallet_nonce = secrets.token_urlsafe(24)
-    item.wallet_expires_at = datetime.now(UTC) + WALLET_TTL
-    item.wallet_answered = False
-    await db.commit()
-    return {
-        "request_uri": wallet.channel_url(f"/applications/{item.id}/request"),
-        **links(item),
-        "expires_at": item.wallet_expires_at.isoformat(),
-    }
-
-
 async def _asked(db: AsyncSession, application_id: uuid.UUID) -> Application:
     item = await db.get(Application, application_id)
     if item is None or item.wallet_purpose is None or item.wallet_nonce is None:
@@ -229,21 +177,6 @@ async def read_request(application_id: uuid.UUID, db: DbSession) -> dict[str, An
         signed = await content(db, item)
         request["submission"] = {"content": signed, "digest": content_digest(signed)}
     return request
-
-
-def _messaging_did(id_token: str) -> str | None:
-    """Where the holder receives the issuer's messages: the `did:peer:2` the
-    (already verified) pairing token names as `didcomm`, if it does;
-    `invalid_didcomm` if it names something else."""
-    named = jwt.decode(id_token, options={"verify_signature": False}).get("didcomm")
-    if named is None:
-        return None
-    if not isinstance(named, str):
-        raise _refuse("invalid_didcomm", status.HTTP_400_BAD_REQUEST)
-    try:
-        return didcomm.peer(named).did
-    except didcomm.DidCommError as error:
-        raise _refuse(error.code, status.HTTP_400_BAD_REQUEST) from None
 
 
 async def _answer(request: Request) -> dict[str, Any]:
@@ -319,7 +252,6 @@ async def answer_request(
             if item.status != "open":
                 raise _refuse("already_paired")
             item.holder_did = did
-            item.holder_messaging_did = _messaging_did(token)
             item.status = "paired"
         case "present":
             token = body.get("vp_token")
