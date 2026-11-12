@@ -264,6 +264,9 @@ async def test_the_issuers_signer_issues_and_the_holder_receives_it(
     delivered = taken.json()
     assert delivered["format"] == "dc+sd-jwt" and delivered["issuer"]["did"] == club.did
     credential = delivered["credential"]
+    # The type it is of, as the credential names it: what the wallet checks.
+    payload = json.loads(base64.urlsafe_b64decode(credential.split(".")[1] + "=="))
+    assert delivered["credential_type"]["vct"] == payload["vct"]
     assert credential.count("~") == len(document["disclosures"]) + 1
     assert (await client.get(base, headers=secret)).json()["delivered_at"]
     # Received once.

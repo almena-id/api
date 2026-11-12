@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from registry_api import answers as checks
 from registry_api import (
     bodies,
+    credential_catalog,
     didcomm,
     form_credentials,
     presentations,
@@ -214,7 +215,12 @@ async def read_request(application_id: uuid.UUID, db: DbSession) -> dict[str, An
         "expires_at": item.wallet_expires_at.isoformat() if item.wallet_expires_at else None,
         # The wallet keeps one key per issuer: the one it pairs and signs with.
         "issuer": {"did": issuer.identity.did, "name": issuer.name},
-        "credential_type": {"id": kind.id, "labels": kind.labels},
+        # Its `vct` too: the wallet checks the credential it takes is of it.
+        "credential_type": {
+            "id": kind.id,
+            "labels": kind.labels,
+            "vct": credential_catalog.vct(kind),
+        },
         "holder": item.holder_did,
     }
     if purpose == "present":
@@ -402,7 +408,11 @@ async def _deliver(db: AsyncSession, item: Application, token: object) -> Respon
             "format": "dc+sd-jwt",
             "credential": item.credential,
             "issuer": {"did": issuer.identity.did, "name": issuer.name},
-            "credential_type": {"id": kind.id, "labels": kind.labels},
+            "credential_type": {
+                "id": kind.id,
+                "labels": kind.labels,
+                "vct": credential_catalog.vct(kind),
+            },
         },
         headers={"Cache-Control": "no-store"},
     )
